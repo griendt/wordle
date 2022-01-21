@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import collections
 import sys
 from enum import Enum
@@ -206,32 +207,34 @@ class Game:
             print('Did not find a solution in time.')
 
 
-def main():
+def main(interactive: bool = False, solution: str = None):
     with open('wordle-words.txt', 'r') as f:
         _all_solutions = list({word.strip() for word in f})
-        print(f"Amount of solutions: {len(_all_solutions)}")
 
     with open('wordle-fake-words.txt', 'r') as f:
         _all_guesses = list({word.strip() for word in f}.union(_all_solutions))
-        print(f"Amount of guesses: {len(_all_guesses)}")
 
     if len(sys.argv) < 2:
         raise ValueError("No solution word provided")
 
-    if (solution := sys.argv[1]) not in _all_solutions:
+    if solution not in _all_solutions:
         raise ValueError("Unrecognized solution word")
 
     game = Game(guesses=_all_guesses, solutions=_all_solutions, solution=solution)
 
     while not game.is_finished():
         while True:
-            guess = input("Guess: ")
-            if guess == "":
-                print("Calculating suggested guess...")
+            if interactive:
+                guess = input("Guess: ")
+                if guess == "":
+                    print("Calculating suggested guess...")
+                    guess = game.suggest_guess()
+                    print(f"Suggested guess: {guess}")
+                    break
+                elif guess in _all_guesses:
+                    break
+            else:
                 guess = game.suggest_guess()
-                print(f"Suggested guess: {guess}")
-                break
-            elif guess in _all_guesses:
                 break
 
             print("Not a valid word, try again.")
@@ -241,6 +244,26 @@ def main():
         print("\n")
 
 
+def parse_args():
+    supported_args = {
+        "--solution": dict(short="-s", default=None, type=str),
+    }
+    supported_flags = {
+        "--interactive": dict(short="-i", action="store_true"),
+    }
+
+    parser = argparse.ArgumentParser()
+    for long_arg, info in supported_args.items():
+        parser.add_argument(info["short"], long_arg, default=info["default"], type=info["type"])
+    for long_arg, info in supported_flags.items():
+        parser.add_argument(info["short"], long_arg, action=info["action"])
+
+    args = parser.parse_args()
+    return {
+        key.strip("-"): getattr(args, key.strip("-")) for key in list(supported_args.keys()) + list(supported_flags.keys())
+    }
+
+
 if __name__ == "__main__":
     WHITE, GREEN, YELLOW = Color
-    main()
+    main(**parse_args())
