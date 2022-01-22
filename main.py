@@ -4,6 +4,7 @@ import argparse
 import collections
 import sys
 from enum import Enum
+from random import randint
 from typing import Optional
 
 
@@ -214,10 +215,9 @@ def main(interactive: bool = False, solution: str = None):
     with open('wordle-fake-words.txt', 'r') as f:
         _all_guesses = list({word.strip() for word in f}.union(_all_solutions))
 
-    if len(sys.argv) < 2:
-        raise ValueError("No solution word provided")
-
-    if solution not in _all_solutions:
+    if not solution:
+        solution = _all_solutions[randint(0, len(_all_solutions) - 1)]
+    elif solution not in _all_solutions:
         raise ValueError("Unrecognized solution word")
 
     game = Game(guesses=_all_guesses, solutions=_all_solutions, solution=solution)
