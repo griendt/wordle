@@ -159,31 +159,6 @@ class Game:
             # Desperado for a solution word
             return self._feasible_solutions[0]
 
-        if len([hint for hint in self.turns[-1][1] if hint == GREEN]) == 4 and len(self._feasible_solutions) > (6 - len(self.turns)):
-            # Only one letter is missing to get the solution, but we cannot simply try them all; we have too few turns to do this.
-            # So we should spend one turn to try and eliminate several options at once.
-            index_to_guess = 0
-            for index, hint in enumerate(self.turns[-1][1]):
-                if hint == WHITE.value:
-                    index_to_guess = index
-                    break
-
-            possible_letters = [word[index_to_guess] for word in self._feasible_solutions]
-
-            max_letter_count = 0
-            best_guesses = {}
-            for word in self._all_guesses:
-                num_matches = len({letter for letter in word if letter in possible_letters})
-                if num_matches == max_letter_count:
-                    best_guesses[word] = 1
-                elif num_matches > max_letter_count:
-                    max_letter_count = num_matches
-                    best_guesses = {word: 1}
-
-            # Return a random guess out of the best guesses
-            for guess in best_guesses:
-                return guess
-
         if len(self.turns) == 2 and self.turns[0][0] == self._turn_1_starter:
             # We have a cached result for these hints after the starter word to play for turn 2, so use that.
             if self.turns[0][1] in self._turn_2_cache.keys():
