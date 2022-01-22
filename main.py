@@ -221,17 +221,17 @@ def main(interactive: bool = False, solution: str = None):
 
 def parse_args():
     supported_args = {
-        "--solution": dict(short="-s", default=None, type=str),
+        "--solution": dict(short="-s", default=None, type=str, help="The solution word. If none provided, a random solution word will be chosen."),
     }
     supported_flags = {
-        "--interactive": dict(short="-i", action="store_true"),
+        "--interactive": dict(short="-i", action="store_true", help="Interactive mode: allows the user to enter guesses. Leave a guess blank to let the program decide on a guess."),
     }
 
     parser = argparse.ArgumentParser()
     for long_arg, info in supported_args.items():
-        parser.add_argument(info["short"], long_arg, default=info["default"], type=info["type"])
+        parser.add_argument(info["short"], long_arg, default=info["default"], type=info["type"], help=info["help"])
     for long_arg, info in supported_flags.items():
-        parser.add_argument(info["short"], long_arg, action=info["action"])
+        parser.add_argument(info["short"], long_arg, action=info["action"], help=info["help"])
 
     args = parser.parse_args()
     return {
