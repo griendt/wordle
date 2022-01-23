@@ -8,7 +8,7 @@ from typing import Optional
 
 
 class Color(Enum):
-    WHITE = "🟥"
+    RED = "🟥"
     GREEN = "🟩"
     YELLOW = "🟨"
 
@@ -89,7 +89,7 @@ class Game:
             if hint == GREEN:
                 solutions = [word for word in solutions if word[index] == guess[index]]
                 letters_seen[guess[index]] += 1
-            elif hint == WHITE:
+            elif hint == RED:
                 solutions = [
                     word for word in solutions
                     if (
@@ -116,7 +116,7 @@ class Game:
         if solution is None:
             solution = self.solution
 
-        colors = [WHITE] * 5
+        colors = [RED] * 5
         counts_per_letter = collections.Counter(solution)
 
         for i in range(5):
@@ -177,7 +177,6 @@ class Game:
                 print("Using cache")
                 return Game.TURN_2_CACHE[self.turns[0][1]]
 
-            print("Could not use cache...")
             # Compute the best word to use for turn 2 and cache it for when we play more games using the same starter word.
             guess = self.get_best_guesses()[0]
             Game.TURN_2_CACHE[self.turns[0][1]] = guess
@@ -254,7 +253,8 @@ def main(interactive: bool = False, solution: str = None, full: bool = False):
         elif solution not in _all_solutions:
             raise ValueError("Unrecognized solution word")
 
-        Game(guesses=_all_guesses, solutions=_all_solutions, solution=solution).play(_all_guesses, interactive)
+        game = Game(guesses=_all_guesses, solutions=_all_solutions, solution=solution).play(_all_guesses, interactive)
+        print(game)
 
 
 def parse_args():
@@ -279,5 +279,5 @@ def parse_args():
 
 
 if __name__ == "__main__":
-    WHITE, GREEN, YELLOW = Color
+    RED, GREEN, YELLOW = Color
     main(**parse_args())
