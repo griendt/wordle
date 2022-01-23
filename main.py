@@ -4,6 +4,7 @@ import argparse
 import collections
 import sys
 from enum import Enum
+from pprint import pprint
 from random import randint
 from typing import Optional
 
@@ -32,6 +33,9 @@ class ColorMask:
 
     def __hash__(self):
         return hash(str(self))
+
+    def __repr__(self):
+        return str(self)
 
 
 class Game:
@@ -145,7 +149,15 @@ class Game:
 
         smallest_bin = min([entry[1] for entry in biggest_bin_per_guess.values()])
         best_words = {guess: entry for guess, entry in biggest_bin_per_guess.items() if entry[1] == smallest_bin}
-        return sorted(best_words.keys())
+
+        # Some words may have multiple bins that are worst-case, while others do not.
+        # So as a secondary metric to the "best worst-case scenario" metric, check for words that have the least such scenarios,
+        # which are then more likely overall to not get into such a worst-case scenario.
+        # We can improve this more generally by taking a certain percentile of all bins rather than always the worst,
+        # but this requires sorting the bins, which takes a significant performance hit.
+        fewest_scenarios = min([len(result[0].split("|")) for result in best_words.values()])
+        best_guesses = sorted([key for key, result in best_words.items() if len(result[0].split("|")) == fewest_scenarios])
+        return best_guesses
 
     def suggest_guess(self) -> str:
         if len(self._feasible_solutions) == 1:
