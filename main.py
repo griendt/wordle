@@ -157,6 +157,12 @@ class Game:
         # but this requires sorting the bins, which takes a significant performance hit.
         fewest_scenarios = min([len(result[0].split("|")) for result in best_words.values()])
         best_guesses = sorted([key for key, result in best_words.items() if len(result[0].split("|")) == fewest_scenarios])
+
+        # If we have multiple equivalent guesses, but some lie in the solution set and some don't, then prefer the ones in the solution set.
+        # They are equivalent but maybe picking a solution guess leads to a lucky win!
+        if solution_best_guesses := [guess for guess in best_guesses if guess in self._feasible_solutions]:
+            return solution_best_guesses
+
         return best_guesses
 
     def suggest_guess(self) -> str:
@@ -219,6 +225,7 @@ class Game:
             self.play_turn(guess=guess)
             if interactive:
                 print(self)
+                print(self._feasible_solutions)
                 print("\n")
 
         return self
