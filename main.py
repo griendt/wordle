@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import argparse
 import collections
-import sys
 from enum import Enum
-from pprint import pprint
 from random import randint
 from typing import Optional
 
@@ -46,7 +44,10 @@ class Game:
     _all_solutions: list[str]
     _feasible_solutions: list[str]
     _turn_computed: int
-    _turn_2_cache: dict[ColorMask, str]
+
+    TURN_2_CACHE: dict[ColorMask, str] = None
+    MAX_TURNS = 6
+    WORD_LENGTH = 5
 
     # Precomputed to be one of the best starter words according to the "smallest worst-case bin size" metric.
     # Equivalent are: serai, arise
@@ -59,13 +60,12 @@ class Game:
         self._all_solutions = solutions
         self._feasible_solutions = solutions
         self._turn_computed = 0
-        self._turn_2_cache = {}
 
     def __str__(self):
         return "\n".join([f"{turn[0]} {turn[1]}" for turn in self.turns])
 
     def is_finished(self):
-        return len(self.turns) == 6 or (self.turns and self.turns[-1][1] == ColorMask([GREEN] * 5))
+        return len(self.turns) == self.MAX_TURNS or self.is_won()
 
     def _filter_feasible_solutions(self, turn_index: int = None) -> None:
         """Filter the internal list of feasible solutions based on the hints given in turn `turn_index`."""
@@ -171,14 +171,16 @@ class Game:
             # Desperado for a solution word
             return self._feasible_solutions[0]
 
-        if len(self.turns) == 2 and self.turns[0][0] == self._turn_1_starter:
+        if len(self.turns) == 1 and self.turns[0][0] == self._turn_1_starter:
             # We have a cached result for these hints after the starter word to play for turn 2, so use that.
-            if self.turns[0][1] in self._turn_2_cache.keys():
-                return self._turn_2_cache[self.turns[0][1]]
+            if self.turns[0][1] in Game.TURN_2_CACHE.keys():
+                print("Using cache")
+                return Game.TURN_2_CACHE[self.turns[0][1]]
 
+            print("Could not use cache...")
             # Compute the best word to use for turn 2 and cache it for when we play more games using the same starter word.
             guess = self.get_best_guesses()[0]
-            self._turn_2_cache[self.turns[0][1]] = guess
+            Game.TURN_2_CACHE[self.turns[0][1]] = guess
             return guess
 
         return self.get_best_guesses()[0]
@@ -194,41 +196,65 @@ class Game:
         elif len(self.turns) == 6:
             print('Did not find a solution in time.')
 
+    def is_won(self):
+        return self.turns and self.turns[-1][1] == ColorMask([GREEN] * self.WORD_LENGTH)
 
-def main(interactive: bool = False, solution: str = None):
+    def play(self, guess_list: list[str], interactive: bool = False) -> Game:
+        while not self.is_finished():
+            while True:
+                if interactive:
+                    guess = input("Guess: ")
+                    if guess == "":
+                        print("Calculating suggested guess...")
+                        guess = self.suggest_guess()
+                        print(f"Suggested guess: {guess}")
+                        break
+                    elif guess in guess_list:
+                        break
+                else:
+                    guess = self.suggest_guess()
+                    break
+
+                print("Not a valid word, try again.")
+
+            self.play_turn(guess=guess)
+            if interactive:
+                print(self)
+                print("\n")
+
+        return self
+
+
+def main(interactive: bool = False, solution: str = None, full: bool = False):
     with open('wordle-words.txt', 'r') as f:
-        _all_solutions = list({word.strip() for word in f})
+        _all_solutions = sorted(list({word.strip() for word in f}))
 
     with open('wordle-fake-words.txt', 'r') as f:
-        _all_guesses = list({word.strip() for word in f}.union(_all_solutions))
+        _all_guesses = sorted(list({word.strip() for word in f}.union(_all_solutions)))
 
-    if not solution:
-        solution = _all_solutions[randint(0, len(_all_solutions) - 1)]
-    elif solution not in _all_solutions:
-        raise ValueError("Unrecognized solution word")
+    Game.TURN_2_CACHE = {}
 
-    game = Game(guesses=_all_guesses, solutions=_all_solutions, solution=solution)
+    if full:
+        # Keep track of how many turns were needed for this game. Key "0" implies the game was not finished within the maximum allotted amount of turns.
+        distribution = {i: 0 for i in range(Game.MAX_TURNS + 1)}
+        for i, solution in enumerate(_all_solutions):
+            print(f"Playing game {i} with solution {solution}...")
+            game = Game(guesses=_all_guesses, solutions=_all_solutions, solution=solution).play(_all_guesses, interactive)
 
-    while not game.is_finished():
-        while True:
-            if interactive:
-                guess = input("Guess: ")
-                if guess == "":
-                    print("Calculating suggested guess...")
-                    guess = game.suggest_guess()
-                    print(f"Suggested guess: {guess}")
-                    break
-                elif guess in _all_guesses:
-                    break
+            if game.is_won():
+                distribution[len(game.turns)] += 1
+                print(game)
             else:
-                guess = game.suggest_guess()
-                break
+                distribution[0] += 1
 
-            print("Not a valid word, try again.")
+        print(distribution)
+    else:
+        if not solution:
+            solution = _all_solutions[randint(0, len(_all_solutions) - 1)]
+        elif solution not in _all_solutions:
+            raise ValueError("Unrecognized solution word")
 
-        game.play_turn(guess=guess)
-        print(game)
-        print("\n")
+        Game(guesses=_all_guesses, solutions=_all_solutions, solution=solution).play(_all_guesses, interactive)
 
 
 def parse_args():
@@ -237,6 +263,7 @@ def parse_args():
     }
     supported_flags = {
         "--interactive": dict(short="-i", action="store_true", help="Interactive mode: allows the user to enter guesses. Leave a guess blank to let the program decide on a guess."),
+        "--full": dict(short="-f", action="store_true", help="Perform a full run over all solution words. Useful for determining whether the engine can solve all games. Overrides -s and -i options.")
     }
 
     parser = argparse.ArgumentParser()
