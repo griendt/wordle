@@ -46,13 +46,11 @@ class Game:
     _feasible_solutions: list[str]
     _turn_computed: int
 
+    # The word to use for turn 1.
+    TURN_1_GUESS: str = "raise"
     TURN_2_CACHE: dict[ColorMask, str] = None
     MAX_TURNS = 6
     WORD_LENGTH = 5
-
-    # Precomputed to be one of the best starter words according to the "smallest worst-case bin size" metric.
-    # Equivalent are: serai, arise
-    _turn_1_starter: str = "raise"
 
     def __init__(self, guesses: list[str], solutions: list[str], solution: str = None, hard: bool = False):
         self.turns = []
@@ -67,15 +65,15 @@ class Game:
         return "\n".join([f"{turn[0]} {turn[1]}" for turn in self.turns])
 
     def is_finished(self):
-        return len(self.turns) == self.MAX_TURNS or self.is_won()
+        return self.num_turns == self.MAX_TURNS or self.is_won()
 
     def _filter_feasible_solutions(self, turn_index: int = None) -> None:
         """Filter the internal list of feasible solutions based on the hints given in turn `turn_index`."""
         if turn_index is None:
             # If not specified, assume the last played turn.
-            turn_index = len(self.turns) - 1
+            turn_index = self.num_turns - 1
 
-        if len(self.turns) < turn_index:
+        if self.num_turns < turn_index:
             # Cannot filter based on a turn that was not yet played!
             return
 
@@ -89,6 +87,10 @@ class Game:
             self._feasible_solutions = self._filter_words_based_on_hint(self._feasible_solutions, guess, index, hint, counts)
             if self.is_hard_mode:
                 self._all_guesses = self._filter_words_based_on_hint(self._all_guesses, guess, index, hint, counts)
+
+    @property
+    def num_turns(self):
+        return len(self.turns)
 
     @staticmethod
     def _filter_words_based_on_hint(words: list[str], guess: str, letter_index: int, hint: Color, counts: dict[(str, Color), int]) -> list[str]:
@@ -169,7 +171,19 @@ class Game:
         if len(self._feasible_solutions) == 1:
             return self._feasible_solutions[0]
 
-        if len(self.turns) == 0:
+        if self.is_hard_mode and len(self._feasible_solutions) <= self.MAX_TURNS - self.num_turns:
+            # There are fewer or equal amount of solutions left as we have turns.
+            # In hard mode, this means we have a guaranteed win; in normal mode, we may decide to play a non-solution word
+            # instead to get to a win faster. But in hard mode this may be a too risky operation; so, for hard mode,
+            # we will simply enumerate the solution words to get a guaranteed win, even if that is not optimal for the amount
+            # of turns needed to get to that win.
+            return self._feasible_solutions[0]
+
+        if self.num_turns == 5:
+            # Desperado for a solution word
+            return self._feasible_solutions[0]
+
+        if self.num_turns == 0:
             # This is the first turn. Use pre-computed best words.
             return self._turn_1_starter
 
@@ -271,7 +285,7 @@ def parse_args():
     supported_flags = {
         "--interactive": dict(short="-i", action="store_true", help="Interactive mode: allows the user to enter guesses. Leave a guess blank to let the program decide on a guess."),
         "--full": dict(short="-f", action="store_true", help="Perform a full run over all solution words. Useful for determining whether the engine can solve all games. Overrides -s and -i options."),
-        "--hard": dict(short="-H", action="store_true", help="Play in 'hard mode': only guesses allowed that match all previous hints. Does not alter the solving metric.")
+        "--hard": dict(short="-H", action="store_true", help="Play in 'hard mode': only guesses allowed that match all previous hints. Does not alter the solving metric."),
     }
 
     parser = argparse.ArgumentParser()
