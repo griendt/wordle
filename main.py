@@ -185,13 +185,9 @@ class Game:
 
         if self.num_turns == 0:
             # This is the first turn. Use pre-computed best words.
-            return self._turn_1_starter
+            return self.TURN_1_GUESS
 
-        if len(self.turns) == 5:
-            # Desperado for a solution word
-            return self._feasible_solutions[0]
-
-        if len(self.turns) == 1 and self.turns[0][0] == self._turn_1_starter:
+        if self.num_turns == 1 and self.turns[0][0] == self.TURN_1_GUESS:
             # We have a cached result for these hints after the starter word to play for turn 2, so use that.
             if self.turns[0][1] in Game.TURN_2_CACHE.keys():
                 print("Using cache")
@@ -212,7 +208,7 @@ class Game:
 
         if guess == self.solution:
             print('Game solved!')
-        elif len(self.turns) == 6:
+        elif self.num_turns == 6:
             print('Did not find a solution in time.')
 
     def is_won(self):
@@ -245,14 +241,20 @@ class Game:
         return self
 
 
-def main(interactive: bool = False, solution: str = None, full: bool = False, hard: bool = False):
+def main(interactive: bool = False, solution: str = None, full: bool = False, hard: bool = False, starter: str = None):
     with open('wordle-words.txt', 'r') as f:
         _all_solutions = sorted(list({word.strip() for word in f}))
 
     with open('wordle-fake-words.txt', 'r') as f:
         _all_guesses = sorted(list({word.strip() for word in f}.union(_all_solutions)))
 
+    if starter is not None:
+        if starter not in _all_guesses:
+            raise ValueError("Unrecognized starter word")
+        Game.TURN_1_GUESS = starter
+
     Game.TURN_2_CACHE = {}
+    failed_words: list[str] = []
 
     if full:
         # Keep track of how many turns were needed for this game. Key "0" implies the game was not finished within the maximum allotted amount of turns.
@@ -266,8 +268,13 @@ def main(interactive: bool = False, solution: str = None, full: bool = False, ha
                 print(game)
             else:
                 distribution[0] += 1
+                failed_words.append(solution)
 
         print(distribution)
+        print("Average turns per win: " + str(sum([key*value for key, value in distribution.items() if key != 0]) / sum([value for value in distribution.values()])))
+
+        if failed_words:
+            print(f"Failed words: {failed_words}")
     else:
         if not solution:
             solution = _all_solutions[randint(0, len(_all_solutions) - 1)]
@@ -281,6 +288,7 @@ def main(interactive: bool = False, solution: str = None, full: bool = False, ha
 def parse_args():
     supported_args = {
         "--solution": dict(short="-s", default=None, type=str, help="The solution word. If none provided, a random solution word will be chosen."),
+        "--starter": dict(short="-S", default=Game.TURN_1_GUESS, type=str, help="Specify a starter word."),
     }
     supported_flags = {
         "--interactive": dict(short="-i", action="store_true", help="Interactive mode: allows the user to enter guesses. Leave a guess blank to let the program decide on a guess."),
