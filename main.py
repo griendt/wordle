@@ -39,6 +39,7 @@ class ColorMask:
 class Game:
     turns: list[tuple[str, ColorMask]]
     solution: Optional[str]
+    is_hard_mode: bool = False
 
     _all_guesses: list[str]
     _all_solutions: list[str]
@@ -53,13 +54,14 @@ class Game:
     # Equivalent are: serai, arise
     _turn_1_starter: str = "raise"
 
-    def __init__(self, guesses: list[str], solutions: list[str], solution: str = None):
+    def __init__(self, guesses: list[str], solutions: list[str], solution: str = None, hard: bool = False):
         self.turns = []
         self.solution = solution
         self._all_guesses = guesses
         self._all_solutions = solutions
         self._feasible_solutions = solutions
         self._turn_computed = 0
+        self.is_hard_mode = hard
 
     def __str__(self):
         return "\n".join([f"{turn[0]} {turn[1]}" for turn in self.turns])
@@ -69,7 +71,6 @@ class Game:
 
     def _filter_feasible_solutions(self, turn_index: int = None) -> None:
         """Filter the internal list of feasible solutions based on the hints given in turn `turn_index`."""
-
         if turn_index is None:
             # If not specified, assume the last played turn.
             turn_index = len(self.turns) - 1
@@ -78,39 +79,38 @@ class Game:
             # Cannot filter based on a turn that was not yet played!
             return
 
-        solutions = self._feasible_solutions
         guess, hints = self.turns[turn_index]
-        letters_seen = collections.defaultdict(lambda: 0)
-        counts = collections.defaultdict(lambda: collections.defaultdict(lambda: 0))
+
+        counts: dict[(str, Color), int] = collections.defaultdict(lambda: 0)
         for letter, hint in zip(guess, hints):
-            counts[letter][hint] += 1
+            counts[(letter, hint)] += 1
 
         for index, hint in enumerate(hints):
-            if hint == GREEN:
-                solutions = [word for word in solutions if word[index] == guess[index]]
-                letters_seen[guess[index]] += 1
-            elif hint == RED:
-                solutions = [
-                    word for word in solutions
-                    if (
-                        # Amount of occurrences of the letter should be exactly equal to the amount of greens+yellows of that letter;
-                        # the white hint denotes that no more occurrences can be present in the target word.
-                            len([letter for letter in word if letter == guess[index]]) == counts[guess[index]][GREEN] + counts[guess[index]][YELLOW]
-                            and word[index] != guess[index]
-                    )
-                ]
-            elif hint == YELLOW:
-                solutions = [
-                    word for word in solutions
-                    if (
-                        # Amount of occurrences of the letter must be at least equal to the amount of green+yellows of that letter;
-                        # the yellow hint does not exclude that there may be more occurrences in the target word.
-                            len([letter for letter in word if letter == guess[index]]) >= counts[guess[index]][GREEN] + counts[guess[index]][YELLOW]
-                            and word[index] != guess[index]
-                    )
-                ]
+            self._feasible_solutions = self._filter_words_based_on_hint(self._feasible_solutions, guess, index, hint, counts)
+            if self.is_hard_mode:
+                self._all_guesses = self._filter_words_based_on_hint(self._all_guesses, guess, index, hint, counts)
 
-        self._feasible_solutions = solutions
+    @staticmethod
+    def _filter_words_based_on_hint(words: list[str], guess: str, letter_index: int, hint: Color, counts: dict[(str, Color), int]) -> list[str]:
+        if hint == GREEN:
+            return [word for word in words if word[letter_index] == guess[letter_index]]
+        if hint == RED:
+            return [word for word in words if (
+                # Amount of occurrences of the letter should be exactly equal to the amount of greens+yellows of that letter;
+                # the white hint denotes that no more occurrences can be present in the target word.
+                len([letter for letter in word if letter == guess[letter_index]]) == counts[(guess[letter_index], GREEN)] + counts[(guess[letter_index], YELLOW)]
+                and word[letter_index] != guess[letter_index]
+            )]
+        if hint == YELLOW:
+            return [word for word in words if (
+                # Amount of occurrences of the letter must be at least equal to the amount of green+yellows of that letter;
+                # the yellow hint does not exclude that there may be more occurrences in the target word.
+                len([letter for letter in word if letter == guess[letter_index]]) >= counts[(guess[letter_index], GREEN)] + counts[(guess[letter_index], YELLOW)]
+                and word[letter_index] != guess[letter_index]
+                )
+            ]
+
+        raise ValueError(f"Unexpected hint: {hint}")
 
     def get_color_mask(self, guess: str, solution: str = None) -> ColorMask:
         if solution is None:
@@ -231,7 +231,7 @@ class Game:
         return self
 
 
-def main(interactive: bool = False, solution: str = None, full: bool = False):
+def main(interactive: bool = False, solution: str = None, full: bool = False, hard: bool = False):
     with open('wordle-words.txt', 'r') as f:
         _all_solutions = sorted(list({word.strip() for word in f}))
 
@@ -245,7 +245,7 @@ def main(interactive: bool = False, solution: str = None, full: bool = False):
         distribution = {i: 0 for i in range(Game.MAX_TURNS + 1)}
         for i, solution in enumerate(_all_solutions):
             print(f"Playing game {i} with solution {solution}...")
-            game = Game(guesses=_all_guesses, solutions=_all_solutions, solution=solution).play(_all_guesses, interactive)
+            game = Game(guesses=_all_guesses, solutions=_all_solutions, solution=solution, hard=hard).play(_all_guesses, interactive)
 
             if game.is_won():
                 distribution[len(game.turns)] += 1
@@ -260,7 +260,7 @@ def main(interactive: bool = False, solution: str = None, full: bool = False):
         elif solution not in _all_solutions:
             raise ValueError("Unrecognized solution word")
 
-        game = Game(guesses=_all_guesses, solutions=_all_solutions, solution=solution).play(_all_guesses, interactive)
+        game = Game(guesses=_all_guesses, solutions=_all_solutions, solution=solution, hard=hard).play(_all_guesses, interactive)
         print(game)
 
 
@@ -270,7 +270,8 @@ def parse_args():
     }
     supported_flags = {
         "--interactive": dict(short="-i", action="store_true", help="Interactive mode: allows the user to enter guesses. Leave a guess blank to let the program decide on a guess."),
-        "--full": dict(short="-f", action="store_true", help="Perform a full run over all solution words. Useful for determining whether the engine can solve all games. Overrides -s and -i options.")
+        "--full": dict(short="-f", action="store_true", help="Perform a full run over all solution words. Useful for determining whether the engine can solve all games. Overrides -s and -i options."),
+        "--hard": dict(short="-H", action="store_true", help="Play in 'hard mode': only guesses allowed that match all previous hints. Does not alter the solving metric.")
     }
 
     parser = argparse.ArgumentParser()
