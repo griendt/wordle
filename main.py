@@ -305,7 +305,7 @@ def main(interactive: bool = False, solution: str = None, full: bool = False, ha
                 distribution[len(game.turns)] += 1
                 print(game)
             else:
-                distribution["Failed"] += 1
+                distribution[0] += 1
                 failed_words.append(solution)
 
         print(distribution)
