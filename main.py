@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import logging
 import math
 from abc import abstractmethod, ABC
 from enum import Enum
@@ -10,33 +11,14 @@ from random import randint
 from typing import Optional, final, Type
 
 
+# Define ColorMask type for clearer type hinting
+ColorMask = int
+
+
 class Color(Enum):
     RED = "🟥"
     GREEN = "🟩"
     YELLOW = "🟨"
-
-
-class ColorMask:
-    colors: list[Color]
-
-    def __init__(self, colors: list[Color]):
-        self.colors = colors
-
-    def __str__(self):
-        return "".join([color.value for color in self.colors])
-
-    def __iter__(self):
-        for color in self.colors:
-            yield color
-
-    def __eq__(self, other):
-        return str(self) == str(other)
-
-    def __hash__(self):
-        return hash(str(self))
-
-    def __repr__(self):
-        return str(self)
 
 
 class Metric(ABC):
@@ -46,6 +28,7 @@ class Metric(ABC):
 
     @final
     def get_optimal_guesses(self, guesses: list[str], feasible_solutions: list[str]) -> list[str]:
+        logger.debug(f"Getting optimal guesses; guess list contains {len(guesses)} words and solutions contain {len(feasible_solutions)} words")
         optimum, optimal_guesses = math.inf, []
         for guess in guesses:
             evaluation = self.evaluate(guess, feasible_solutions)
@@ -58,6 +41,7 @@ class Metric(ABC):
             elif evaluation == optimum:
                 optimal_guesses.append(guess)
 
+        logger.debug(f"Done getting optimal guesses")
         return sorted(optimal_guesses)
 
 
@@ -99,7 +83,7 @@ class Game:
         self.metric = metric
 
     def __str__(self):
-        return "\n".join([f"{turn[0]} {turn[1]}" for turn in self.turns])
+        return "\n" + "\n".join([f"{turn[0]} {self.color_mask_visual(turn[1])}" for turn in self.turns])
 
     @property
     def num_turns(self):
@@ -111,46 +95,64 @@ class Game:
 
     @property
     def is_won(self):
-        return self.turns and self.turns[-1][1] == ColorMask([GREEN] * self.WORD_LENGTH)
+        return self.turns and self.turns[-1][1] == 2**self.WORD_LENGTH - 1
 
     @staticmethod
-    def _filter_words_based_on_hint(words: list[str], guess: str, letter_index: int, hint: Color, counts: dict[(str, Color), int]) -> list[str]:
-        if hint == GREEN:
-            return [word for word in words if word[letter_index] == guess[letter_index]]
-        if hint == RED:
-            return [word for word in words if (
-                # Amount of occurrences of the letter should be exactly equal to the amount of greens+yellows of that letter;
-                # the white hint denotes that no more occurrences can be present in the target word.
-                len([letter for letter in word if letter == guess[letter_index]]) == counts[(guess[letter_index], GREEN)] + counts[(guess[letter_index], YELLOW)]
-                and word[letter_index] != guess[letter_index]
-            )]
-        if hint == YELLOW:
-            return [word for word in words if (
-                # Amount of occurrences of the letter must be at least equal to the amount of green+yellows of that letter;
-                # the yellow hint does not exclude that there may be more occurrences in the target word.
-                len([letter for letter in word if letter == guess[letter_index]]) >= counts[(guess[letter_index], GREEN)] + counts[(guess[letter_index], YELLOW)]
-                and word[letter_index] != guess[letter_index]
-                )
-            ]
+    def color_mask_visual(color_mask: ColorMask) -> str:
+        colors = ""
+        for i in range(5):
+            if color_mask & (1 << i):
+                colors += Color.GREEN.value
+            elif color_mask & (1 << (i + 5)):
+                colors += Color.YELLOW.value
+            else:
+                colors += Color.RED.value
 
-        raise ValueError(f"Unexpected hint: {hint}")
+        return colors
 
     @staticmethod
-    def get_color_mask(guess: str, solution: str) -> ColorMask:
-        colors = [RED] * 5
+    def _filter_words_based_on_color_mask(words: list[str], guess: str, color_mask: ColorMask, counts: dict[tuple[str, Color], int]) -> list[str]:
+        for i in range(5):
+            if color_mask & (1 << i):
+                # This index is marked green
+                words = [word for word in words if word[i] == guess[i]]
+            elif color_mask & (1 << (i + 5)):
+                # This index is marked yellow
+                words = [word for word in words if (
+                    # Amount of occurrences of the letter must be at least equal to the amount of green+yellows of that letter;
+                    # the yellow hint does not exclude that there may be more occurrences in the target word.
+                    len([letter for letter in word if letter == guess[i]]) >= counts[(guess[i], GREEN)] + counts[(guess[i], YELLOW)]
+                    and word[i] != guess[i]
+                    )
+                ]
+            else:
+                # This index is marked gray
+                words = [word for word in words if (
+                    # Amount of occurrences of the letter should be exactly equal to the amount of greens+yellows of that letter;
+                    # the white hint denotes that no more occurrences can be present in the target word.
+                    len([letter for letter in word if letter == guess[i]]) == counts[(guess[i], GREEN)] + counts[(guess[i], YELLOW)]
+                    and word[i] != guess[i]
+                    )
+                ]
+
+        return words
+
+    @staticmethod
+    def get_color_mask(guess: str, solution: str) -> int:
+        colors = 0
         counts_per_letter = collections.Counter(solution)
 
         for i in range(5):
             if solution[i] == guess[i]:
-                colors[i] = GREEN
+                colors += (1 << i)
                 counts_per_letter[guess[i]] -= 1
 
         for i in range(5):
             if solution[i] != guess[i] and guess[i] in solution and counts_per_letter[guess[i]] > 0:
                 counts_per_letter[guess[i]] -= 1
-                colors[i] = YELLOW
+                colors += (1 << (i + 5))
 
-        return ColorMask(colors)
+        return colors
 
     @staticmethod
     def get_bins(guess: str, solutions: list[str]):
@@ -170,16 +172,18 @@ class Game:
             # Cannot filter based on a turn that was not yet played!
             return
 
-        guess, hints = self.turns[turn_index]
+        guess, color_mask = self.turns[turn_index]
+        counts: dict[tuple[str, Color], int] = collections.defaultdict(lambda: 0)
 
-        counts: dict[(str, Color), int] = collections.defaultdict(lambda: 0)
-        for letter, hint in zip(guess, hints):
-            counts[(letter, hint)] += 1
+        for index, letter in enumerate(guess):
+            if color_mask & (1 << index) != 0:
+                counts[(letter, Color.GREEN)] += 1
+            elif color_mask & (1 << (index + self.WORD_LENGTH)) != 0:
+                counts[(letter, Color.YELLOW)] += 1
 
-        for index, hint in enumerate(hints):
-            self._feasible_solutions = self._filter_words_based_on_hint(self._feasible_solutions, guess, index, hint, counts)
-            if self.is_hard_mode:
-                self._all_guesses = self._filter_words_based_on_hint(self._all_guesses, guess, index, hint, counts)
+        self._feasible_solutions = self._filter_words_based_on_color_mask(self._feasible_solutions, guess, color_mask, counts)
+        if self.is_hard_mode:
+            self._all_guesses = self._filter_words_based_on_color_mask(self._all_guesses, guess, color_mask, counts)
 
     def get_best_guesses(self):
         best_guesses = self.metric().get_optimal_guesses(self._all_guesses, self._feasible_solutions)
@@ -214,7 +218,7 @@ class Game:
         if self.num_turns == 1 and self.turns[0][0] == self.TURN_1_GUESS:
             # We have a cached result for these hints after the starter word to play for turn 2, so use that.
             if self.turns[0][1] in Game.TURN_2_CACHE.keys():
-                print("Using cache")
+                logger.info("Using cache")
                 return Game.TURN_2_CACHE[self.turns[0][1]]
 
             # Compute the best word to use for turn 2 and cache it for when we play more games using the same starter word.
@@ -231,9 +235,9 @@ class Game:
         self._filter_feasible_solutions()
 
         if guess == self.solution:
-            print('Game solved!')
+            logger.info('Game solved!')
         elif self.num_turns == 6:
-            print('Did not find a solution in time.')
+            logger.warning('Did not find a solution in time.')
 
     def play(self, guess_list: list[str], interactive: bool = False) -> Game:
         while not self.is_finished:
@@ -241,9 +245,9 @@ class Game:
                 if interactive:
                     guess = input("Guess: ")
                     if guess == "":
-                        print("Calculating suggested guess...")
+                        logger.debug("Calculating suggested guess...")
                         guess = self.suggest_guess()
-                        print(f"Suggested guess: {guess}")
+                        logger.debug(f"Suggested guess: {guess}")
                         break
                     elif guess in guess_list:
                         break
@@ -255,9 +259,7 @@ class Game:
 
             self.play_turn(guess=guess)
             if interactive:
-                print(self)
-                print(self._feasible_solutions)
-                print("\n")
+                print("\n" + str(self) + "\n")
 
         return self
 
@@ -297,13 +299,13 @@ def main(interactive: bool = False, solution: str = None, full: bool = False, ha
         # Keep track of how many turns were needed for this game. Key "0" implies the game was not finished within the maximum allotted amount of turns.
         distribution = {i: 0 for i in range(Game.MAX_TURNS + 1)}
         for i, solution in enumerate(_all_solutions):
-            print(f"Playing game {i} with solution {solution}...")
+            logger.info(f"Playing game {i} with solution {solution}...")
             game_options["solution"] = solution
             game = Game(**game_options).play(_all_guesses, interactive)
 
             if game.is_won:
                 distribution[len(game.turns)] += 1
-                print(game)
+                logger.info(game)
             else:
                 distribution[0] += 1
                 failed_words.append(solution)
@@ -342,4 +344,7 @@ def parse_args():
 
 if __name__ == "__main__":
     RED, GREEN, YELLOW = Color
+    logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s %(message)s")
+    logger = logging.getLogger("wordle")
+    logger.setLevel(logging.DEBUG)
     main(**parse_args())
