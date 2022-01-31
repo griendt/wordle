@@ -66,8 +66,8 @@ class Game:
     _feasible_solutions: list[str]
     _turn_computed: int
 
-    # The word to use for turn 1.
-    TURN_1_GUESS: str = "raise"
+    # The word to use for turn 1. Examples are "raise" for paranoid, "salet" for pattern metrics.
+    TURN_1_GUESS: str = None
     TURN_2_CACHE: dict[ColorMask, str] = None
     MAX_TURNS = 6
     WORD_LENGTH = 5
@@ -211,8 +211,8 @@ class Game:
             # Desperado for a solution word
             return self._feasible_solutions[0]
 
-        if self.num_turns == 0:
-            # This is the first turn. Use pre-computed best words.
+        if self.num_turns == 0 and self.TURN_1_GUESS is not None:
+            # This is the first turn. Use pre-computed best words if available.
             return self.TURN_1_GUESS
 
         if self.num_turns == 1 and self.turns[0][0] == self.TURN_1_GUESS:
@@ -346,5 +346,5 @@ if __name__ == "__main__":
     RED, GREEN, YELLOW = Color
     logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s %(message)s")
     logger = logging.getLogger("wordle")
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(logging.INFO)
     main(**parse_args())
