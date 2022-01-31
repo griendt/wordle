@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import argparse
 import collections
+import math
+from abc import abstractmethod, ABC
 from enum import Enum
+from inspect import isclass
 from random import randint
-from typing import Optional
+from typing import Optional, final, Type
 
 
 class Color(Enum):
@@ -36,10 +39,43 @@ class ColorMask:
         return str(self)
 
 
+class Metric(ABC):
+    @abstractmethod
+    def evaluate(self, guess: str, feasible_solutions: list[str]) -> float:
+        raise NotImplementedError
+
+    @final
+    def get_optimal_guesses(self, guesses: list[str], feasible_solutions: list[str]) -> list[str]:
+        optimum, optimal_guesses = math.inf, []
+        for guess in guesses:
+            evaluation = self.evaluate(guess, feasible_solutions)
+            if evaluation > optimum:
+                continue
+
+            if evaluation < optimum:
+                optimum = evaluation
+                optimal_guesses = [guess]
+            elif evaluation == optimum:
+                optimal_guesses.append(guess)
+
+        return sorted(optimal_guesses)
+
+
+class Paranoid(Metric):
+    def evaluate(self, guess: str, feasible_solutions: list[str]) -> float:
+        return max(Game.get_bins(guess, solutions=feasible_solutions).values())
+
+
+class Pattern(Metric):
+    def evaluate(self, guess: str, feasible_solutions: list[str]) -> float:
+        return -len(Game.get_bins(guess, solutions=feasible_solutions))
+
+
 class Game:
     turns: list[tuple[str, ColorMask]]
     solution: Optional[str]
     is_hard_mode: bool = False
+    metric: Type[Metric] = Paranoid
 
     _all_guesses: list[str]
     _all_solutions: list[str]
@@ -52,7 +88,7 @@ class Game:
     MAX_TURNS = 6
     WORD_LENGTH = 5
 
-    def __init__(self, guesses: list[str], solutions: list[str], solution: str = None, hard: bool = False):
+    def __init__(self, guesses: list[str], solutions: list[str], solution: str = None, hard: bool = False, metric: Type[Metric] = Paranoid):
         self.turns = []
         self.solution = solution
         self._all_guesses = guesses
@@ -60,37 +96,22 @@ class Game:
         self._feasible_solutions = solutions
         self._turn_computed = 0
         self.is_hard_mode = hard
+        self.metric = metric
 
     def __str__(self):
         return "\n".join([f"{turn[0]} {turn[1]}" for turn in self.turns])
 
-    def is_finished(self):
-        return self.num_turns == self.MAX_TURNS or self.is_won()
-
-    def _filter_feasible_solutions(self, turn_index: int = None) -> None:
-        """Filter the internal list of feasible solutions based on the hints given in turn `turn_index`."""
-        if turn_index is None:
-            # If not specified, assume the last played turn.
-            turn_index = self.num_turns - 1
-
-        if self.num_turns < turn_index:
-            # Cannot filter based on a turn that was not yet played!
-            return
-
-        guess, hints = self.turns[turn_index]
-
-        counts: dict[(str, Color), int] = collections.defaultdict(lambda: 0)
-        for letter, hint in zip(guess, hints):
-            counts[(letter, hint)] += 1
-
-        for index, hint in enumerate(hints):
-            self._feasible_solutions = self._filter_words_based_on_hint(self._feasible_solutions, guess, index, hint, counts)
-            if self.is_hard_mode:
-                self._all_guesses = self._filter_words_based_on_hint(self._all_guesses, guess, index, hint, counts)
-
     @property
     def num_turns(self):
         return len(self.turns)
+
+    @property
+    def is_finished(self):
+        return self.num_turns == self.MAX_TURNS or self.is_won
+
+    @property
+    def is_won(self):
+        return self.turns and self.turns[-1][1] == ColorMask([GREEN] * self.WORD_LENGTH)
 
     @staticmethod
     def _filter_words_based_on_hint(words: list[str], guess: str, letter_index: int, hint: Color, counts: dict[(str, Color), int]) -> list[str]:
@@ -114,10 +135,8 @@ class Game:
 
         raise ValueError(f"Unexpected hint: {hint}")
 
-    def get_color_mask(self, guess: str, solution: str = None) -> ColorMask:
-        if solution is None:
-            solution = self.solution
-
+    @staticmethod
+    def get_color_mask(guess: str, solution: str) -> ColorMask:
         colors = [RED] * 5
         counts_per_letter = collections.Counter(solution)
 
@@ -133,32 +152,37 @@ class Game:
 
         return ColorMask(colors)
 
-    def get_bins(self, guess: str, solutions: list[str]):
+    @staticmethod
+    def get_bins(guess: str, solutions: list[str]):
         bins = collections.defaultdict(lambda: 0)
         for solution in solutions:
-            bins[self.get_color_mask(guess, solution)] += 1
+            bins[Game.get_color_mask(guess, solution)] += 1
 
         return bins
 
+    def _filter_feasible_solutions(self, turn_index: int = None) -> None:
+        """Filter the internal list of feasible solutions based on the hints given in turn `turn_index`."""
+        if turn_index is None:
+            # If not specified, assume the last played turn.
+            turn_index = self.num_turns - 1
+
+        if self.num_turns < turn_index:
+            # Cannot filter based on a turn that was not yet played!
+            return
+
+        guess, hints = self.turns[turn_index]
+
+        counts: dict[(str, Color), int] = collections.defaultdict(lambda: 0)
+        for letter, hint in zip(guess, hints):
+            counts[(letter, hint)] += 1
+
+        for index, hint in enumerate(hints):
+            self._feasible_solutions = self._filter_words_based_on_hint(self._feasible_solutions, guess, index, hint, counts)
+            if self.is_hard_mode:
+                self._all_guesses = self._filter_words_based_on_hint(self._all_guesses, guess, index, hint, counts)
+
     def get_best_guesses(self):
-        biggest_bin_per_guess: dict[str, tuple[str, int]] = {}
-
-        for guess in self._all_guesses:
-            bins = self.get_bins(guess, self._feasible_solutions)
-            max_bin_size = max(bins.values())
-            max_bins = [bin for bin in bins.keys() if bins[bin] == max_bin_size]
-            biggest_bin_per_guess[guess] = ("|".join([str(bin) for bin in max_bins]), max_bin_size)
-
-        smallest_bin = min([entry[1] for entry in biggest_bin_per_guess.values()])
-        best_words = {guess: entry for guess, entry in biggest_bin_per_guess.items() if entry[1] == smallest_bin}
-
-        # Some words may have multiple bins that are worst-case, while others do not.
-        # So as a secondary metric to the "best worst-case scenario" metric, check for words that have the least such scenarios,
-        # which are then more likely overall to not get into such a worst-case scenario.
-        # We can improve this more generally by taking a certain percentile of all bins rather than always the worst,
-        # but this requires sorting the bins, which takes a significant performance hit.
-        fewest_scenarios = min([len(result[0].split("|")) for result in best_words.values()])
-        best_guesses = sorted([key for key, result in best_words.items() if len(result[0].split("|")) == fewest_scenarios])
+        best_guesses = self.metric().get_optimal_guesses(self._all_guesses, self._feasible_solutions)
 
         # If we have multiple equivalent guesses, but some lie in the solution set and some don't, then prefer the ones in the solution set.
         # They are equivalent but maybe picking a solution guess leads to a lucky win!
@@ -211,11 +235,8 @@ class Game:
         elif self.num_turns == 6:
             print('Did not find a solution in time.')
 
-    def is_won(self):
-        return self.turns and self.turns[-1][1] == ColorMask([GREEN] * self.WORD_LENGTH)
-
     def play(self, guess_list: list[str], interactive: bool = False) -> Game:
-        while not self.is_finished():
+        while not self.is_finished:
             while True:
                 if interactive:
                     guess = input("Guess: ")
@@ -241,7 +262,10 @@ class Game:
         return self
 
 
-def main(interactive: bool = False, solution: str = None, full: bool = False, hard: bool = False, starter: str = None):
+def main(interactive: bool = False, solution: str = None, full: bool = False, hard: bool = False, starter: str = None, metric: str = None):
+    metric = globals()[metric.title()]
+    assert issubclass(metric, Metric)
+
     with open('wordle-words.txt', 'r') as f:
         _all_solutions = sorted(list({word.strip() for word in f}))
 
@@ -255,40 +279,48 @@ def main(interactive: bool = False, solution: str = None, full: bool = False, ha
 
     Game.TURN_2_CACHE = {}
     failed_words: list[str] = []
+    game_options = {
+        "guesses": _all_guesses,
+        "solutions": _all_solutions,
+        "solution": solution,
+        "hard": hard,
+        "metric": metric,
+    }
+    if not full:
+        if not solution:
+            game_options["solution"] = _all_solutions[randint(0, len(_all_solutions) - 1)]
+        elif solution not in _all_solutions:
+            raise ValueError("Unrecognized solution word")
 
-    if full:
+        print(Game(**game_options).play(_all_guesses, interactive))
+    else:
         # Keep track of how many turns were needed for this game. Key "0" implies the game was not finished within the maximum allotted amount of turns.
         distribution = {i: 0 for i in range(Game.MAX_TURNS + 1)}
         for i, solution in enumerate(_all_solutions):
             print(f"Playing game {i} with solution {solution}...")
-            game = Game(guesses=_all_guesses, solutions=_all_solutions, solution=solution, hard=hard).play(_all_guesses, interactive)
+            game_options["solution"] = solution
+            game = Game(**game_options).play(_all_guesses, interactive)
 
-            if game.is_won():
+            if game.is_won:
                 distribution[len(game.turns)] += 1
                 print(game)
             else:
-                distribution[0] += 1
+                distribution["Failed"] += 1
                 failed_words.append(solution)
 
         print(distribution)
-        print("Average turns per win: " + str(sum([key*value for key, value in distribution.items() if key != 0]) / sum([value for value in distribution.values()])))
+        print("Average turns per win: " + str(sum([key*value for key, value in distribution.items() if isinstance(key, int)]) / sum([value for value in distribution.values()])))
 
         if failed_words:
             print(f"Failed words: {failed_words}")
-    else:
-        if not solution:
-            solution = _all_solutions[randint(0, len(_all_solutions) - 1)]
-        elif solution not in _all_solutions:
-            raise ValueError("Unrecognized solution word")
-
-        game = Game(guesses=_all_guesses, solutions=_all_solutions, solution=solution, hard=hard).play(_all_guesses, interactive)
-        print(game)
 
 
 def parse_args():
+    metrics = [name.lower() for name, cls in globals().items() if isclass(cls) and issubclass(cls, Metric) and cls != Metric]
     supported_args = {
         "--solution": dict(short="-s", default=None, type=str, help="The solution word. If none provided, a random solution word will be chosen."),
         "--starter": dict(short="-S", default=Game.TURN_1_GUESS, type=str, help="Specify a starter word."),
+        "--metric": dict(short="-m", default="paranoid", type=str, help=f"Specify a metric to use for solving game. Supported values are: {', '.join(metrics)}"),
     }
     supported_flags = {
         "--interactive": dict(short="-i", action="store_true", help="Interactive mode: allows the user to enter guesses. Leave a guess blank to let the program decide on a guess."),
