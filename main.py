@@ -8,8 +8,7 @@ from abc import abstractmethod, ABC
 from enum import Enum
 from inspect import isclass
 from random import randint
-from typing import Optional, final, Type
-
+from typing import Optional, final, Type, Callable
 
 # Define ColorMask type for clearer type hinting
 ColorMask = int
@@ -53,6 +52,20 @@ class Paranoid(Metric):
 class Pattern(Metric):
     def evaluate(self, guess: str, feasible_solutions: list[str]) -> float:
         return -len(Game.get_bins(guess, solutions=feasible_solutions))
+
+
+class Deviation(Metric):
+    def evaluate(self, guess: str, feasible_solutions: list[str]) -> float:
+        values = Game.get_bins(guess, solutions=feasible_solutions).values()
+
+        if len(values) == 1:
+            # Only one possible bin: this suggestion provides no information at all.
+            return math.inf
+
+        average_population = sum(values) / len(values)
+
+        # Since square root is monotone, we do not need to compute it in order to compare guesses with one another.
+        return sum([(value - average_population)**2 for value in values])/(len(values) - 1)
 
 
 class Game:
@@ -318,11 +331,11 @@ def main(interactive: bool = False, solution: str = None, full: bool = False, ha
 
 
 def parse_args():
-    metrics = [name.lower() for name, cls in globals().items() if isclass(cls) and issubclass(cls, Metric) and cls != Metric]
+    metrics = sorted([name.lower() for name, cls in globals().items() if isclass(cls) and issubclass(cls, Metric) and cls != Metric])
     supported_args = {
         "--solution": dict(short="-s", default=None, type=str, help="The solution word. If none provided, a random solution word will be chosen."),
         "--starter": dict(short="-S", default=Game.TURN_1_GUESS, type=str, help="Specify a starter word."),
-        "--metric": dict(short="-m", default="paranoid", type=str, help=f"Specify a metric to use for solving game. Supported values are: {', '.join(metrics)}"),
+        "--metric": dict(short="-m", default="paranoid", type=str, help=f"Specify a metric to use for solving the game. Supported values are: {', '.join(metrics)}"),
     }
     supported_flags = {
         "--interactive": dict(short="-i", action="store_true", help="Interactive mode: allows the user to enter guesses. Leave a guess blank to let the program decide on a guess."),
@@ -343,7 +356,7 @@ def parse_args():
 
 
 if __name__ == "__main__":
-    RED, GREEN, YELLOW = Color
+    RED, GREEN, YELLOW = Color.RED, Color.GREEN, Color.YELLOW
     logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s %(message)s")
     logger = logging.getLogger("wordle")
     logger.setLevel(logging.INFO)
