@@ -5,12 +5,14 @@ import collections
 import logging
 import math
 from abc import abstractmethod, ABC
+from dataclasses import field
 from enum import Enum
 from random import randint
 from typing import Optional, final, Type
 
 # Define ColorMask type for clearer type hinting
 ColorMask = int
+metrics: dict[str, Type[Metric]] = {}
 
 
 def register_metric(cls):
@@ -92,8 +94,8 @@ class Game:
     _turn_computed: int
 
     # The word to use for turn 1. Examples are "raise" for paranoid, "salet" for pattern metrics.
-    TURN_1_GUESS: str = None
-    TURN_2_CACHE: dict[ColorMask, str] = None
+    TURN_1_GUESS: Optional[str] = None
+    TURN_2_CACHE: dict[ColorMask, str] = field(default_factory=dict)
     MAX_TURNS = 6
     WORD_LENGTH = 5
 
@@ -146,16 +148,16 @@ class Game:
                 words = [word for word in words if (
                     # Amount of occurrences of the letter must be at least equal to the amount of green+yellows of that letter;
                     # the yellow hint does not exclude that there may be more occurrences in the target word.
-                    len([letter for letter in word if letter == guess[i]]) >= counts[(guess[i], GREEN)] + counts[(guess[i], YELLOW)]
-                    and word[i] != guess[i]
+                        len([letter for letter in word if letter == guess[i]]) >= counts[(guess[i], GREEN)] + counts[(guess[i], YELLOW)]
+                        and word[i] != guess[i]
                 )]
             else:
                 # This index is marked gray
                 words = [word for word in words if (
                     # Amount of occurrences of the letter should be exactly equal to the amount of greens+yellows of that letter;
                     # the white hint denotes that no more occurrences can be present in the target word.
-                    len([letter for letter in word if letter == guess[i]]) == counts[(guess[i], GREEN)] + counts[(guess[i], YELLOW)]
-                    and word[i] != guess[i]
+                        len([letter for letter in word if letter == guess[i]]) == counts[(guess[i], GREEN)] + counts[(guess[i], YELLOW)]
+                        and word[i] != guess[i]
                 )]
 
         return words
@@ -344,16 +346,12 @@ def parse_args():
     supported_args = {
         "--solution": dict(short="-s", default=None, type=str, help="The solution word. If none provided, a random solution word will be chosen."),
         "--starter": dict(short="-S", default=Game.TURN_1_GUESS, type=str, help="Specify a starter word."),
-        "--metric": dict(short="-m", default="Paranoid", type=str,
-                         help=f"Specify a metric to use for solving the game. Supported values are: {', '.join(metrics.keys())}"),
+        "--metric": dict(short="-m", default="Paranoid", type=str, help=f"Specify a metric to use for solving the game. Supported values are: {', '.join(metrics.keys())}"),
     }
     supported_flags = {
-        "--interactive": dict(short="-i", action="store_true",
-                              help="Interactive mode: allows the user to enter guesses. Leave a guess blank to let the program decide on a guess."),
-        "--full": dict(short="-f", action="store_true",
-                       help="Perform a full run over all solution words. Useful for determining whether the engine can solve all games. Overrides -s and -i options."),
-        "--hard": dict(short="-H", action="store_true",
-                       help="Play in 'hard mode': only guesses allowed that match all previous hints. Does not alter the solving metric."),
+        "--interactive": dict(short="-i", action="store_true", help="Interactive mode: allows the user to enter guesses. Leave a guess blank to let the program decide on a guess."),
+        "--full": dict(short="-f", action="store_true", help="Perform a full run over all solution words. Useful for determining whether the engine can solve all games. Overrides -s and -i options."),
+        "--hard": dict(short="-H", action="store_true", help="Play in 'hard mode': only guesses allowed that match all previous hints. Does not alter the solving metric."),
     }
 
     parser = argparse.ArgumentParser()
@@ -369,7 +367,6 @@ def parse_args():
 
 
 if __name__ == "__main__":
-    metrics: dict[str, Type[Metric]] = {}
     RED, GREEN, YELLOW = Color.RED, Color.GREEN, Color.YELLOW
 
     logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s %(message)s")
