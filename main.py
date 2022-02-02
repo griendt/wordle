@@ -6,12 +6,17 @@ import logging
 import math
 from abc import abstractmethod, ABC
 from enum import Enum
-from inspect import isclass
 from random import randint
-from typing import Optional, final, Type, Callable
+from typing import Optional, final, Type
 
 # Define ColorMask type for clearer type hinting
 ColorMask = int
+
+
+def register_metric(cls):
+    assert issubclass(cls, Metric)
+    metrics[str(cls())] = cls
+    return cls
 
 
 class Color(Enum):
@@ -24,6 +29,10 @@ class Metric(ABC):
     @abstractmethod
     def evaluate(self, guess: str, feasible_solutions: list[str]) -> float:
         raise NotImplementedError
+
+    @final
+    def __str__(self):
+        return type(self).__name__
 
     @final
     def get_optimal_guesses(self, guesses: list[str], feasible_solutions: list[str]) -> list[str]:
@@ -44,16 +53,19 @@ class Metric(ABC):
         return sorted(optimal_guesses)
 
 
+@register_metric
 class Paranoid(Metric):
     def evaluate(self, guess: str, feasible_solutions: list[str]) -> float:
         return max(Game.get_bins(guess, solutions=feasible_solutions).values())
 
 
+@register_metric
 class Pattern(Metric):
     def evaluate(self, guess: str, feasible_solutions: list[str]) -> float:
         return -len(Game.get_bins(guess, solutions=feasible_solutions))
 
 
+@register_metric
 class Deviation(Metric):
     def evaluate(self, guess: str, feasible_solutions: list[str]) -> float:
         values = Game.get_bins(guess, solutions=feasible_solutions).values()
@@ -65,7 +77,7 @@ class Deviation(Metric):
         average_population = sum(values) / len(values)
 
         # Since square root is monotone, we do not need to compute it in order to compare guesses with one another.
-        return sum([(value - average_population)**2 for value in values])/(len(values) - 1)
+        return sum([(value - average_population) ** 2 for value in values]) / (len(values) - 1)
 
 
 class Game:
@@ -108,7 +120,7 @@ class Game:
 
     @property
     def is_won(self):
-        return self.turns and self.turns[-1][1] == 2**self.WORD_LENGTH - 1
+        return self.turns and self.turns[-1][1] == 2 ** self.WORD_LENGTH - 1
 
     @staticmethod
     def color_mask_visual(color_mask: ColorMask) -> str:
@@ -136,8 +148,7 @@ class Game:
                     # the yellow hint does not exclude that there may be more occurrences in the target word.
                     len([letter for letter in word if letter == guess[i]]) >= counts[(guess[i], GREEN)] + counts[(guess[i], YELLOW)]
                     and word[i] != guess[i]
-                    )
-                ]
+                )]
             else:
                 # This index is marked gray
                 words = [word for word in words if (
@@ -145,8 +156,7 @@ class Game:
                     # the white hint denotes that no more occurrences can be present in the target word.
                     len([letter for letter in word if letter == guess[i]]) == counts[(guess[i], GREEN)] + counts[(guess[i], YELLOW)]
                     and word[i] != guess[i]
-                    )
-                ]
+                )]
 
         return words
 
@@ -277,9 +287,8 @@ class Game:
         return self
 
 
-def main(interactive: bool = False, solution: str = None, full: bool = False, hard: bool = False, starter: str = None, metric: str = None):
-    metric = globals()[metric.title()]
-    assert issubclass(metric, Metric)
+def main(metric: str, interactive: bool = False, solution: str = None, full: bool = False, hard: bool = False, starter: str = None):
+    metric = metrics[metric]
 
     with open('wordle-words.txt', 'r') as f:
         _all_solutions = sorted(list({word.strip() for word in f}))
@@ -324,23 +333,27 @@ def main(interactive: bool = False, solution: str = None, full: bool = False, ha
                 failed_words.append(solution)
 
         print(distribution)
-        print("Average turns per win: " + str(sum([key*value for key, value in distribution.items() if isinstance(key, int)]) / sum([value for value in distribution.values()])))
+        print("Average turns per win: " + str(
+            sum([key * value for key, value in distribution.items() if isinstance(key, int)]) / sum([value for value in distribution.values()])))
 
         if failed_words:
             print(f"Failed words: {failed_words}")
 
 
 def parse_args():
-    metrics = sorted([name.lower() for name, cls in globals().items() if isclass(cls) and issubclass(cls, Metric) and cls != Metric])
     supported_args = {
         "--solution": dict(short="-s", default=None, type=str, help="The solution word. If none provided, a random solution word will be chosen."),
         "--starter": dict(short="-S", default=Game.TURN_1_GUESS, type=str, help="Specify a starter word."),
-        "--metric": dict(short="-m", default="paranoid", type=str, help=f"Specify a metric to use for solving the game. Supported values are: {', '.join(metrics)}"),
+        "--metric": dict(short="-m", default="Paranoid", type=str,
+                         help=f"Specify a metric to use for solving the game. Supported values are: {', '.join(metrics.keys())}"),
     }
     supported_flags = {
-        "--interactive": dict(short="-i", action="store_true", help="Interactive mode: allows the user to enter guesses. Leave a guess blank to let the program decide on a guess."),
-        "--full": dict(short="-f", action="store_true", help="Perform a full run over all solution words. Useful for determining whether the engine can solve all games. Overrides -s and -i options."),
-        "--hard": dict(short="-H", action="store_true", help="Play in 'hard mode': only guesses allowed that match all previous hints. Does not alter the solving metric."),
+        "--interactive": dict(short="-i", action="store_true",
+                              help="Interactive mode: allows the user to enter guesses. Leave a guess blank to let the program decide on a guess."),
+        "--full": dict(short="-f", action="store_true",
+                       help="Perform a full run over all solution words. Useful for determining whether the engine can solve all games. Overrides -s and -i options."),
+        "--hard": dict(short="-H", action="store_true",
+                       help="Play in 'hard mode': only guesses allowed that match all previous hints. Does not alter the solving metric."),
     }
 
     parser = argparse.ArgumentParser()
@@ -356,8 +369,11 @@ def parse_args():
 
 
 if __name__ == "__main__":
+    metrics: dict[str, Type[Metric]] = {}
     RED, GREEN, YELLOW = Color.RED, Color.GREEN, Color.YELLOW
+
     logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s %(message)s")
     logger = logging.getLogger("wordle")
     logger.setLevel(logging.INFO)
+
     main(**parse_args())
