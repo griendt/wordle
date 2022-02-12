@@ -394,7 +394,7 @@ def parse_args():
         "--solution": {"short": "-s", "default": None, "type": str, "help": "The solution word. If none provided, a random solution word will be chosen."},
         "--starter": {"short": "-S", "default": Game.TURN_1_GUESS, "type": str, "help": "Specify a starter word."},
         "--min-subprocess-chunk": {"type": int, "help": "Minimum chunk size for parallel multiprocessing of possible guesses.", "default": Metric.MINIMUM_SUBPROCESS_CHUNK_SIZE},
-        "--max-cpus": {"type": int, "help": "Maximum amount of CPUs that may be used. Defaults to all available."},
+        "--max-cpus": {"type": int, "help": "Maximum amount of CPUs that may be used. Defaults to all available.", "default": multiprocessing.cpu_count()},
         "--log-level": {"type": str, "help": "Set the log level. Defaults to INFO.", "default": logging.INFO}
     }
 
