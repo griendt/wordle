@@ -12,7 +12,7 @@ from dataclasses import field
 from enum import Enum
 from multiprocessing.pool import ApplyResult
 from random import randint
-from typing import Optional, final, Type
+from typing import Optional, final, Type, Any
 
 # Define ColorMask type for clearer type hinting
 ColorMask = int
@@ -218,7 +218,7 @@ class Game:
 
     @staticmethod
     def get_bins(guess: str, solutions: list[str]):
-        bins = collections.defaultdict(lambda: 0)
+        bins: collections.defaultdict = collections.defaultdict(lambda: 0)
         for solution in solutions:
             bins[Game.get_color_mask(guess, solution)] += 1
 
@@ -327,7 +327,6 @@ class Game:
 
 
 def main(metric: str, interactive: bool = False, solution: str = None, full: bool = False, hard: bool = False, starter: str = None, **kwargs):
-    metric = metrics[metric]
     if "min_subprocess_chunk" in kwargs:
         Metric.MINIMUM_SUBPROCESS_CHUNK_SIZE = kwargs["min_subprocess_chunk"]
     if "max_cpus" in kwargs:
@@ -348,13 +347,14 @@ def main(metric: str, interactive: bool = False, solution: str = None, full: boo
 
     Game.TURN_2_CACHE = {}
     failed_words: list[str] = []
-    game_options = {
+    game_options: dict[str, Any] = {
         "guesses": _all_guesses,
         "solutions": _all_solutions,
         "solution": solution,
         "hard": hard,
-        "metric": metric,
+        "metric": metrics[metric],
     }
+
     if not full:
         if not solution:
             game_options["solution"] = _all_solutions[randint(0, len(_all_solutions) - 1)]
