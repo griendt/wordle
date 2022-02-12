@@ -63,7 +63,7 @@ class Metric(ABC):
     def get_optimal_guesses(self, guesses: list[str], feasible_solutions: list[str]) -> list[str]:
         logger.info(f"Getting optimal guesses; guess list contains {len(guesses)} words and solutions contain {len(feasible_solutions)} words")
 
-        if len(guesses) <= Metric.MINIMUM_SUBPROCESS_CHUNK_SIZE:
+        if len(guesses) <= Metric.MINIMUM_SUBPROCESS_CHUNK_SIZE or (Metric.MAX_CORES or 1) <= 1:
             optimal_guesses, optimum = self.optimal_guesses_for_chunk(guesses, feasible_solutions)
         else:
             chunk_size = max(Metric.MINIMUM_SUBPROCESS_CHUNK_SIZE, len(guesses) // (Metric.MAX_CORES or multiprocessing.cpu_count()))
@@ -324,8 +324,12 @@ class Game:
         return self
 
 
-def main(metric: str, interactive: bool = False, solution: str = None, full: bool = False, hard: bool = False, starter: str = None):
+def main(metric: str, interactive: bool = False, solution: str = None, full: bool = False, hard: bool = False, starter: str = None, **kwargs):
     metric = metrics[metric]
+    if "min_subprocess_chunk" in kwargs:
+        Metric.MINIMUM_SUBPROCESS_CHUNK_SIZE = kwargs["min_subprocess_chunk"]
+    if "max_cpus" in kwargs:
+        Metric.MAX_CORES = kwargs["max_cpus"]
 
     with open('wordle-words.txt', 'r') as f:
         _all_solutions = sorted(list({word.strip() for word in f}))
@@ -379,12 +383,14 @@ def main(metric: str, interactive: bool = False, solution: str = None, full: boo
 
 def parse_args():
     supported_args = {
-        "--solution": {"short": "-s", "default": None, "type": str, "help": "The solution word. If none provided, a random solution word will be chosen."},
-        "--starter": {"short": "-S", "default": Game.TURN_1_GUESS, "type": str, "help": "Specify a starter word."},
-        "--metric": {"default": "Paranoid", "type": str, "help": f"Specify a metric to use for solving the game. Supported values are: {', '.join(metrics.keys())}"},
-        "--interactive": {"short": "-i", "action": "store_true", "help": "Interactive mode: allows the user to enter guesses. Leave a guess blank to let the program decide on a guess."},
         "--full": {"short": "-f", "action": "store_true", "help": "Perform a full run over all solution words. Useful for determining whether the engine can solve all games. Overrides -s and -i options."},
         "--hard": {"short": "-H", "action": "store_true", "help": "Play in 'hard mode': only guesses allowed that match all previous hints. Does not alter the solving metric."},
+        "--interactive": {"short": "-i", "action": "store_true", "help": "Interactive mode: allows the user to enter guesses. Leave a guess blank to let the program decide on a guess."},
+        "--metric": {"default": "Paranoid", "type": str, "help": f"Specify a metric to use for solving the game. Supported values are: {', '.join(metrics.keys())}"},
+        "--solution": {"short": "-s", "default": None, "type": str, "help": "The solution word. If none provided, a random solution word will be chosen."},
+        "--starter": {"short": "-S", "default": Game.TURN_1_GUESS, "type": str, "help": "Specify a starter word."},
+        "--min-subprocess-chunk": {"type": int, "help": "Minimum chunk size for parallel multiprocessing of possible guesses.", "default": Metric.MINIMUM_SUBPROCESS_CHUNK_SIZE},
+        "--max-cpus": {"type": int, "help": "Maximum amount of CPUs that may be used. Defaults to all available."},
     }
 
     parser = argparse.ArgumentParser()
@@ -395,7 +401,7 @@ def parse_args():
         )
 
     args = parser.parse_args()
-    return {key.strip("-"): getattr(args, key.strip("-")) for key in list(supported_args.keys())}
+    return {key.strip("-").replace("-", "_"): getattr(args, key.strip("-").replace("-", "_")) for key in list(supported_args.keys())}
 
 
 if __name__ == "__main__":
