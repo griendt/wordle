@@ -344,26 +344,23 @@ def main(metric: str, interactive: bool = False, solution: str = None, full: boo
 
 def parse_args():
     supported_args = {
-        "--solution": dict(short="-s", default=None, type=str, help="The solution word. If none provided, a random solution word will be chosen."),
-        "--starter": dict(short="-S", default=Game.TURN_1_GUESS, type=str, help="Specify a starter word."),
-        "--metric": dict(short="-m", default="Paranoid", type=str, help=f"Specify a metric to use for solving the game. Supported values are: {', '.join(metrics.keys())}"),
-    }
-    supported_flags = {
-        "--interactive": dict(short="-i", action="store_true", help="Interactive mode: allows the user to enter guesses. Leave a guess blank to let the program decide on a guess."),
-        "--full": dict(short="-f", action="store_true", help="Perform a full run over all solution words. Useful for determining whether the engine can solve all games. Overrides -s and -i options."),
-        "--hard": dict(short="-H", action="store_true", help="Play in 'hard mode': only guesses allowed that match all previous hints. Does not alter the solving metric."),
+        "--solution": {"short": "-s", "default": None, "type": str, "help": "The solution word. If none provided, a random solution word will be chosen."},
+        "--starter": {"short": "-S", "default": Game.TURN_1_GUESS, "type": str, "help": "Specify a starter word."},
+        "--metric": {"default": "Paranoid", "type": str, "help": f"Specify a metric to use for solving the game. Supported values are: {', '.join(metrics.keys())}"},
+        "--interactive": {"short": "-i", "action": "store_true", "help": "Interactive mode: allows the user to enter guesses. Leave a guess blank to let the program decide on a guess."},
+        "--full": {"short": "-f", "action": "store_true", "help": "Perform a full run over all solution words. Useful for determining whether the engine can solve all games. Overrides -s and -i options."},
+        "--hard": {"short": "-H", "action": "store_true", "help": "Play in 'hard mode': only guesses allowed that match all previous hints. Does not alter the solving metric."},
     }
 
     parser = argparse.ArgumentParser()
     for long_arg, info in supported_args.items():
-        parser.add_argument(info["short"], long_arg, default=info["default"], type=info["type"], help=info["help"])
-    for long_arg, info in supported_flags.items():
-        parser.add_argument(info["short"], long_arg, action=info["action"], help=info["help"])
+        parser.add_argument(
+            *[dash_arg for dash_arg in [long_arg, info.get("short")] if dash_arg is not None],
+            **{key: value for key, value in info.items() if key in ["default", "type", "help", "action"]}
+        )
 
     args = parser.parse_args()
-    return {
-        key.strip("-"): getattr(args, key.strip("-")) for key in list(supported_args.keys()) + list(supported_flags.keys())
-    }
+    return {key.strip("-"): getattr(args, key.strip("-")) for key in list(supported_args.keys())}
 
 
 if __name__ == "__main__":
