@@ -8,6 +8,7 @@ import copy
 import logging
 import math
 import multiprocessing
+import operator
 from abc import abstractmethod, ABC
 from dataclasses import field
 from enum import Enum
@@ -175,6 +176,29 @@ class Deviation(Metric):
 
         # Since square root is monotone, we do not need to compute it in order to compare guesses with one another.
         return sum([(value - average_population) ** 2 for value in values]) / (len(values) - 1)
+
+
+@register_metric
+class AverageEntropy(Metric):
+    def evaluate(self, guess: str, feasible_solutions: list[str], bins: dict[int, int] = None) -> float:
+        bins = bins if bins else Game.get_bins(guess, solutions=feasible_solutions)
+        values = bins.values()
+        information_bits = [-math.log(value/len(feasible_solutions), 2) for value in values]
+
+        return -sum(information_bits) / len(information_bits)
+
+
+@register_metric
+class PercentileEntropy(Metric):
+    PERCENTILE: float = 0
+
+    def evaluate(self, guess: str, feasible_solutions: list[str], bins: dict[int, int] = None) -> float:
+        assert 0 < self.PERCENTILE <= 100
+        bins = bins if bins else Game.get_bins(guess, solutions=feasible_solutions)
+        values = bins.values()
+        information_bits = sorted([-math.log(value/len(feasible_solutions), 2) for value in values], reverse=True)
+
+        return -information_bits[math.ceil(len(information_bits)*(self.PERCENTILE/100)) - 1]
 
 
 class Game:
@@ -406,6 +430,8 @@ def main(metric: str, interactive: bool = False, solution: str = None, full: boo
         Metric.MAX_CORES = kwargs["max_cpus"]
     if kwargs.get("log_level"):
         logger.setLevel(kwargs["log_level"])
+    if kwargs.get("metric_entropy_percentile") is not None:
+        PercentileEntropy.PERCENTILE = kwargs["metric_entropy_percentile"]
 
     with open('wordle-words.txt', 'r') as f:
         _all_solutions = [word.strip() for word in f]
@@ -447,7 +473,8 @@ def main(metric: str, interactive: bool = False, solution: str = None, full: boo
         for key in range(1, 7):
             results.append(str(key) + ":    |" + "■" * math.ceil(80 * distribution[key] / biggest_bin_size) + " " + str(distribution[key]))
 
-        results.append("Lost: |" + terminal.red_bold + "■" * math.ceil(80 * distribution[0] / biggest_bin_size) + " " + str(distribution[0]) + terminal.normal)
+        results.append(terminal.red_bold + "Lost: |" + "■" * math.ceil(80 * distribution[0] / biggest_bin_size) + " " + str(distribution[0]) + terminal.normal)
+        results.append("Running average win: " + ("%.4f" % (sum([key*distribution[key] for key in range(1, 7)]) / sum([distribution[key] for key in range(1, 7)]))))
 
         return terminal.yellow + "\n".join(results) + terminal.normal
 
@@ -505,6 +532,7 @@ def parse_args():
         "--log-level": {"type": str, "help": "Set the log level. Defaults to INFO.", "default": logging.INFO},
         "--full-truncate-solutions": {"action": "store_true", "help": "If set, and a full run is being done, words that are already seen as solutions will be truncated from the solution space in subsequent games."},
         "--only-solution-set": {"action": "store_true", "help": "If set, only words in the solution set will be played at all times."},
+        "--metric-entropy-percentile": {"type": float, "default": None, "help": "The percentile (0-100) to use when using the PercentileEntropy metric. Note that 100th percentile is effectively equivalent to the Paranoid metric."},
     }
 
     parser = argparse.ArgumentParser()
