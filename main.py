@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import copy
 import logging
 import math
 import multiprocessing
@@ -153,7 +154,7 @@ class Game:
         self.metric = metric
 
     def __str__(self):
-        return "\n".join([f"{turn[0]} {self.color_mask_visual(turn[1])}" for turn in self.turns])
+        return "\n".join([f"{turn[0]} {self.color_mask_visual(turn[1])}" for turn in self.turns]) + "\n"*(self.MAX_TURNS - len(self.turns)) + f"\nGuess space: {len(self._all_guesses)}, solution space: {len(self._all_solutions)}"
 
     @property
     def num_turns(self):
@@ -341,7 +342,12 @@ def main(metric: str, interactive: bool = False, solution: str = None, full: boo
         logger.setLevel(kwargs["log_level"])
 
     with open('wordle-words.txt', 'r') as f:
-        _all_solutions = sorted(list({word.strip() for word in f}))
+        _all_solutions = [word.strip() for word in f]
+        num_solutions = len(_all_solutions)
+
+        if "full_truncate_solutions" not in kwargs:
+            # Sort the list to avoid being spoiled, but keep the list sorted in case we apply the full-truncate-solutions optimization.
+            _all_solutions = sorted(_all_solutions)
 
     with open('wordle-fake-words.txt', 'r') as f:
         _all_guesses = sorted(list({word.strip() for word in f}.union(_all_solutions)))
@@ -386,10 +392,8 @@ def main(metric: str, interactive: bool = False, solution: str = None, full: boo
     else:
         # Keep track of how many turns were needed for this game. Key "0" implies the game was not finished within the maximum allotted amount of turns.
         distribution = {i: 0 for i in range(Game.MAX_TURNS + 1)}
-        for i, solution in enumerate(_all_solutions):
-            print(terminal.clear + progress_bar(i, len(_all_solutions)))
-            print(turn_distribution_bars(distribution))
-            print(f"Playing game {terminal.yellow}{i}{terminal.normal} with solution {terminal.bold_green}{solution}{terminal.normal}...")
+
+        for i, solution in enumerate(copy.deepcopy(_all_solutions)):
             game_options["solution"] = solution
             game = Game(**game_options).play(_all_guesses, interactive)
 
@@ -399,6 +403,14 @@ def main(metric: str, interactive: bool = False, solution: str = None, full: boo
             else:
                 distribution[0] += 1
                 failed_words.append(solution)
+
+            print(f"{terminal.clear}Played game {terminal.yellow}{i}{terminal.normal} with solution {terminal.bold_green}{solution}{terminal.normal}")
+            print(game)
+            print(progress_bar(i, num_solutions))
+            print(turn_distribution_bars(distribution))
+
+            if "full_truncate_solutions" in kwargs:
+                _all_solutions.remove(solution)
 
         print(distribution)
         print("Average turns per win: " + str(
@@ -418,7 +430,8 @@ def parse_args():
         "--starter": {"short": "-S", "default": Game.TURN_1_GUESS, "type": str, "help": "Specify a starter word."},
         "--min-subprocess-chunk": {"type": int, "help": "Minimum chunk size for parallel multiprocessing of possible guesses.", "default": Metric.MINIMUM_SUBPROCESS_CHUNK_SIZE},
         "--max-cpus": {"type": int, "help": "Maximum amount of CPUs that may be used. Defaults to all available.", "default": multiprocessing.cpu_count()},
-        "--log-level": {"type": str, "help": "Set the log level. Defaults to INFO.", "default": logging.INFO}
+        "--log-level": {"type": str, "help": "Set the log level. Defaults to INFO.", "default": logging.INFO},
+        "--full-truncate-solutions": {"action": "store_true", "help": "If set, and a full run is being done, words that are already seen as solutions will be truncated from the solution space in subsequent games."},
     }
 
     parser = argparse.ArgumentParser()
