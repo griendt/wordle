@@ -473,7 +473,7 @@ def main(metric: str, interactive: bool = False, solution: str = None, full: boo
                 distribution[0] += 1
                 failed_words.append(solution)
 
-            if "full_truncate_solutions" in kwargs:
+            if kwargs.get("full_truncate_solutions"):
                 Game.TURN_1_CACHE_PREVIOUS_SOLUTION = solution
 
             print(f"{terminal.clear}Played game {terminal.yellow}{i}{terminal.normal} with solution {terminal.bold_green}{solution}{terminal.normal}")
@@ -481,7 +481,7 @@ def main(metric: str, interactive: bool = False, solution: str = None, full: boo
             print(progress_bar(i, num_solutions))
             print(turn_distribution_bars(distribution))
 
-            if "full_truncate_solutions" in kwargs:
+            if kwargs.get("full_truncate_solutions"):
                 _all_solutions.remove(solution)
 
         print(distribution)
