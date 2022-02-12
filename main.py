@@ -4,9 +4,11 @@ import argparse
 import collections
 import logging
 import math
+import multiprocessing
 from abc import abstractmethod, ABC
 from dataclasses import field
 from enum import Enum
+from multiprocessing.pool import ApplyResult
 from random import randint
 from typing import Optional, final, Type
 
@@ -28,6 +30,11 @@ class Color(Enum):
 
 
 class Metric(ABC):
+    # How many guesses need evaluation before we decide to spawn subprocesses for parallel computation.
+    MINIMUM_SUBPROCESS_CHUNK_SIZE: int = 100
+    # How many CPU cores may be used when evaluating. Defaults to all available.
+    MAX_CORES: Optional[int] = None
+
     @abstractmethod
     def evaluate(self, guess: str, feasible_solutions: list[str]) -> float:
         raise NotImplementedError
@@ -37,21 +44,49 @@ class Metric(ABC):
         return type(self).__name__
 
     @final
-    def get_optimal_guesses(self, guesses: list[str], feasible_solutions: list[str]) -> list[str]:
-        logger.debug(f"Getting optimal guesses; guess list contains {len(guesses)} words and solutions contain {len(feasible_solutions)} words")
-        optimum, optimal_guesses = math.inf, []
-        for guess in guesses:
+    def optimal_guesses_for_chunk(self, guess_chunk: list[str], feasible_solutions: list[str]) -> tuple[list[str], float]:
+        _optimum, _optimal_guesses = math.inf, []
+        for guess in guess_chunk:
             evaluation = self.evaluate(guess, feasible_solutions)
-            if evaluation > optimum:
+            if evaluation > _optimum:
                 continue
 
-            if evaluation < optimum:
-                optimum = evaluation
-                optimal_guesses = [guess]
-            elif evaluation == optimum:
-                optimal_guesses.append(guess)
+            if evaluation < _optimum:
+                _optimum = evaluation
+                _optimal_guesses = [guess]
+            elif evaluation == _optimum:
+                _optimal_guesses.append(guess)
 
-        logger.debug(f"Done getting optimal guesses")
+        return _optimal_guesses, _optimum
+
+    @final
+    def get_optimal_guesses(self, guesses: list[str], feasible_solutions: list[str]) -> list[str]:
+        logger.info(f"Getting optimal guesses; guess list contains {len(guesses)} words and solutions contain {len(feasible_solutions)} words")
+
+        if len(guesses) <= Metric.MINIMUM_SUBPROCESS_CHUNK_SIZE:
+            optimal_guesses, optimum = self.optimal_guesses_for_chunk(guesses, feasible_solutions)
+        else:
+            chunk_size = max(Metric.MINIMUM_SUBPROCESS_CHUNK_SIZE, len(guesses) // (Metric.MAX_CORES or multiprocessing.cpu_count()))
+            chunks = [guesses[i: i + chunk_size] for i in range(0, len(guesses), chunk_size)]
+            async_results: list[ApplyResult] = []
+            pool = multiprocessing.Pool(processes=len(chunks))
+
+            for chunk in chunks:
+                async_results.append(pool.apply_async(func=self.optimal_guesses_for_chunk, args=(chunk, feasible_solutions)))
+            pool.close()
+            pool.join()
+
+            results: list[tuple[list[str], float]] = [result.get() for result in async_results]
+            optimum, optimal_guesses = math.inf, []
+
+            for (guesses, local_optimum) in results:
+                if local_optimum < optimum:
+                    optimum = local_optimum
+                    optimal_guesses = guesses
+                elif local_optimum == optimum:
+                    optimal_guesses += guesses
+
+        logger.info(f"Done getting optimal guesses")
         return sorted(optimal_guesses)
 
 
