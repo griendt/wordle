@@ -72,7 +72,7 @@ class Metric(ABC):
     def get_optimal_guesses(self, guesses: list[str], feasible_solutions: list[str], is_first_turn: bool) -> list[str]:
         logger.debug(f"Getting optimal guesses; guess list contains {len(guesses)} words and solutions contain {len(feasible_solutions)} words")
 
-        previous_bins_per_guess: Optional[dict[str,dict[ColorMask, int]]] = None
+        previous_bins_per_guess: Optional[dict[str, dict[ColorMask, int]]] = None
         if is_first_turn and Game.TURN_1_CACHE is not None and Game.TURN_1_CACHE_PREVIOUS_SOLUTION is not None:
             previous_solution, previous_bins_per_guess = Game.TURN_1_CACHE_PREVIOUS_SOLUTION, Game.TURN_1_CACHE
 
@@ -85,32 +85,33 @@ class Metric(ABC):
         if len(guesses) <= Metric.MINIMUM_SUBPROCESS_CHUNK_SIZE or (Metric.MAX_CORES or 1) <= 1:
             optimal_guesses, optimum = self.optimal_guesses_for_chunk(guesses, feasible_solutions)
             return sorted(optimal_guesses)
-        else:
-            if not is_first_turn or Game.TURN_1_CACHE is None:
-                chunk_size = max(Metric.MINIMUM_SUBPROCESS_CHUNK_SIZE, len(guesses) // (Metric.MAX_CORES or multiprocessing.cpu_count()))
-                chunks = [guesses[i: i + chunk_size] for i in range(0, len(guesses), chunk_size)]
-                async_results: list[ApplyResult] = []
-                pool = multiprocessing.Pool(processes=len(chunks))
 
-                for chunk in chunks:
-                    async_results.append(pool.apply_async(func=Game.get_bins_many, args=(chunk, feasible_solutions)))
-                pool.close()
-                pool.join()
+        chunk_size = max(Metric.MINIMUM_SUBPROCESS_CHUNK_SIZE, len(guesses) // (Metric.MAX_CORES or multiprocessing.cpu_count()))
+        chunks = [guesses[i: i + chunk_size] for i in range(0, len(guesses), chunk_size)]
+        optimum, optimal_guesses = math.inf, []
+        results: list[tuple[list[str], float]] = []
 
-                # Merge all the bins together
-                results: list[dict[str, dict[int, int]]] = [result.get() for result in async_results]
-                bins_per_guess: dict[str, dict[int, int]] = {}
-                for result in results:
-                    bins_per_guess.update(result)
+        if is_first_turn and Game.TURN_1_CACHE is None:
+            async_results: list[ApplyResult] = []
+            pool = multiprocessing.Pool(processes=len(chunks))
 
-                if is_first_turn:
-                    Game.TURN_1_CACHE = bins_per_guess
-                    Game.TURN_1_CACHE_PREVIOUS_SOLUTION = None
-            else:
-                assert previous_bins_per_guess is not None
-                bins_per_guess = previous_bins_per_guess
+            for chunk in chunks:
+                async_results.append(pool.apply_async(func=Game.get_bins_many, args=(chunk, feasible_solutions)))
+            pool.close()
+            pool.join()
 
-            optimum, optimal_guesses = math.inf, []
+            # Merge all the bins together
+            awaited_results: list[dict[str, dict[int, int]]] = [result.get() for result in async_results]
+            bins_per_guess: dict[str, dict[int, int]] = {}
+            for result in awaited_results:
+                bins_per_guess.update(result)
+
+            Game.TURN_1_CACHE = bins_per_guess
+            Game.TURN_1_CACHE_PREVIOUS_SOLUTION = None
+
+        if is_first_turn and Game.TURN_1_CACHE is not None and Game.TURN_1_CACHE_PREVIOUS_SOLUTION is not None:
+            assert previous_bins_per_guess is not None
+            bins_per_guess = previous_bins_per_guess
 
             for (guess, bins) in bins_per_guess.items():
                 value = self.evaluate(guess, feasible_solutions, bins)
@@ -119,6 +120,28 @@ class Metric(ABC):
                     optimal_guesses = [guess]
                 elif value == optimum:
                     optimal_guesses.append(guess)
+
+            return sorted(optimal_guesses)
+
+        if len(chunks) > 1:
+            async_results: list[ApplyResult] = []
+            pool = multiprocessing.Pool(processes=len(chunks))
+            for chunk in chunks:
+                async_results.append(pool.apply_async(func=self.optimal_guesses_for_chunk, args=(chunk, feasible_solutions)))
+            pool.close()
+            pool.join()
+
+            # Merge all the bins together
+            results = [result.get() for result in async_results]
+        else:
+            results = [self.optimal_guesses_for_chunk(chunks[0], feasible_solutions)]
+
+        for (guesses, local_optimum) in results:
+            if local_optimum < optimum:
+                optimum = local_optimum
+                optimal_guesses = guesses
+            elif local_optimum == optimum:
+                optimal_guesses += guesses
 
         logger.debug(f"Done getting optimal guesses")
         return sorted(optimal_guesses)
@@ -377,23 +400,26 @@ class Game:
 
 
 def main(metric: str, interactive: bool = False, solution: str = None, full: bool = False, hard: bool = False, starter: str = None, **kwargs):
-    if "min_subprocess_chunk" in kwargs:
+    if kwargs.get("min_subprocess_chunk"):
         Metric.MINIMUM_SUBPROCESS_CHUNK_SIZE = kwargs["min_subprocess_chunk"]
-    if "max_cpus" in kwargs:
+    if kwargs.get("max_cpus"):
         Metric.MAX_CORES = kwargs["max_cpus"]
-    if "log_level" in kwargs:
+    if kwargs.get("log_level"):
         logger.setLevel(kwargs["log_level"])
 
     with open('wordle-words.txt', 'r') as f:
         _all_solutions = [word.strip() for word in f]
         num_solutions = len(_all_solutions)
 
-        if "full_truncate_solutions" not in kwargs:
+        if not kwargs.get("full_truncate_solutions"):
             # Sort the list to avoid being spoiled, but keep the list sorted in case we apply the full-truncate-solutions optimization.
             _all_solutions = sorted(_all_solutions)
 
-    with open('wordle-fake-words.txt', 'r') as f:
-        _all_guesses = sorted(list({word.strip() for word in f}.union(_all_solutions)))
+    if kwargs.get("only-solution-set"):
+        _all_guesses = sorted(list(_all_solutions))
+    else:
+        with open('wordle-fake-words.txt', 'r') as f:
+            _all_guesses = sorted(list({word.strip() for word in f}.union(_all_solutions)))
 
     if starter is not None:
         if starter not in _all_guesses:
@@ -478,6 +504,7 @@ def parse_args():
         "--max-cpus": {"type": int, "help": "Maximum amount of CPUs that may be used. Defaults to all available.", "default": multiprocessing.cpu_count()},
         "--log-level": {"type": str, "help": "Set the log level. Defaults to INFO.", "default": logging.INFO},
         "--full-truncate-solutions": {"action": "store_true", "help": "If set, and a full run is being done, words that are already seen as solutions will be truncated from the solution space in subsequent games."},
+        "--only-solution-set": {"action": "store_true", "help": "If set, only words in the solution set will be played at all times."},
     }
 
     parser = argparse.ArgumentParser()
