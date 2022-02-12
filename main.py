@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 from __future__ import annotations
 
 import argparse
@@ -330,6 +332,8 @@ def main(metric: str, interactive: bool = False, solution: str = None, full: boo
         Metric.MINIMUM_SUBPROCESS_CHUNK_SIZE = kwargs["min_subprocess_chunk"]
     if "max_cpus" in kwargs:
         Metric.MAX_CORES = kwargs["max_cpus"]
+    if "log_level" in kwargs:
+        logger.setLevel(kwargs["log_level"])
 
     with open('wordle-words.txt', 'r') as f:
         _all_solutions = sorted(list({word.strip() for word in f}))
@@ -391,6 +395,7 @@ def parse_args():
         "--starter": {"short": "-S", "default": Game.TURN_1_GUESS, "type": str, "help": "Specify a starter word."},
         "--min-subprocess-chunk": {"type": int, "help": "Minimum chunk size for parallel multiprocessing of possible guesses.", "default": Metric.MINIMUM_SUBPROCESS_CHUNK_SIZE},
         "--max-cpus": {"type": int, "help": "Maximum amount of CPUs that may be used. Defaults to all available."},
+        "--log-level": {"type": str, "help": "Set the log level. Defaults to INFO.", "default": logging.INFO}
     }
 
     parser = argparse.ArgumentParser()
