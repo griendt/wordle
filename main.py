@@ -14,9 +14,15 @@ from multiprocessing.pool import ApplyResult
 from random import randint
 from typing import Optional, final, Type, Any
 
+import blessings
+
 # Define ColorMask type for clearer type hinting
 ColorMask = int
 metrics: dict[str, Type[Metric]] = {}
+
+# Escape sequence to clear the terminal screen
+clear: str = "\033c"
+terminal: blessings.Terminal = blessings.Terminal()
 
 
 def register_metric(cls):
@@ -147,7 +153,7 @@ class Game:
         self.metric = metric
 
     def __str__(self):
-        return "\n" + "\n".join([f"{turn[0]} {self.color_mask_visual(turn[1])}" for turn in self.turns])
+        return "\n".join([f"{turn[0]} {self.color_mask_visual(turn[1])}" for turn in self.turns])
 
     @property
     def num_turns(self):
@@ -320,8 +326,8 @@ class Game:
                 print("Not a valid word, try again.")
 
             self.play_turn(guess=guess)
-            if interactive:
-                print("\n" + str(self) + "\n")
+            if interactive and not self.is_finished:
+                print(terminal.clear + str(self) + "\n")
 
         return self
 
@@ -355,6 +361,21 @@ def main(metric: str, interactive: bool = False, solution: str = None, full: boo
         "metric": metrics[metric],
     }
 
+    def progress_bar(current: int, total: int) -> str:
+        assert 0 <= current <= total
+        return "|" + "■" * (80 * current // total) + " " * (80 - (80 * current // total)) + "| " + ("%.2f" % (100 * current / total)) + "%"
+
+    def turn_distribution_bars(distribution: dict[int, int]) -> str:
+        results: list[str] = []
+        biggest_bin_size = max(distribution.values()) or 1
+
+        for key in range(1, 7):
+            results.append(str(key) + ":    |" + "■" * math.ceil(80 * distribution[key] / biggest_bin_size) + " " + str(distribution[key]))
+
+        results.append("Lost: |" + terminal.red_bold + "■" * math.ceil(80 * distribution[0] / biggest_bin_size) + " " + str(distribution[0]) + terminal.normal)
+
+        return terminal.yellow + "\n".join(results) + terminal.normal
+
     if not full:
         if not solution:
             game_options["solution"] = _all_solutions[randint(0, len(_all_solutions) - 1)]
@@ -366,7 +387,9 @@ def main(metric: str, interactive: bool = False, solution: str = None, full: boo
         # Keep track of how many turns were needed for this game. Key "0" implies the game was not finished within the maximum allotted amount of turns.
         distribution = {i: 0 for i in range(Game.MAX_TURNS + 1)}
         for i, solution in enumerate(_all_solutions):
-            logger.info(f"Playing game {i} with solution {solution}...")
+            print(terminal.clear + progress_bar(i, len(_all_solutions)))
+            print(turn_distribution_bars(distribution))
+            print(f"Playing game {terminal.yellow}{i}{terminal.normal} with solution {terminal.bold_green}{solution}{terminal.normal}...")
             game_options["solution"] = solution
             game = Game(**game_options).play(_all_guesses, interactive)
 
