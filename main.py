@@ -45,7 +45,7 @@ class Metric(ABC):
     MAX_CORES: Optional[int] = None
 
     @abstractmethod
-    def evaluate(self, guess: str, feasible_solutions: list[str]) -> float:
+    def evaluate(self, guess: str, feasible_solutions: list[str], bins: dict[int, int] = None) -> float:
         raise NotImplementedError
 
     @final
@@ -69,52 +69,80 @@ class Metric(ABC):
         return _optimal_guesses, _optimum
 
     @final
-    def get_optimal_guesses(self, guesses: list[str], feasible_solutions: list[str]) -> list[str]:
-        logger.info(f"Getting optimal guesses; guess list contains {len(guesses)} words and solutions contain {len(feasible_solutions)} words")
+    def get_optimal_guesses(self, guesses: list[str], feasible_solutions: list[str], is_first_turn: bool) -> list[str]:
+        logger.debug(f"Getting optimal guesses; guess list contains {len(guesses)} words and solutions contain {len(feasible_solutions)} words")
+
+        previous_bins_per_guess: Optional[dict[str,dict[ColorMask, int]]] = None
+        if is_first_turn and Game.TURN_1_CACHE is not None and Game.TURN_1_CACHE_PREVIOUS_SOLUTION is not None:
+            previous_solution, previous_bins_per_guess = Game.TURN_1_CACHE_PREVIOUS_SOLUTION, Game.TURN_1_CACHE
+
+            for guess, bins in Game.get_bins_many(guesses, [previous_solution]).items():
+                for bin, occurrences in bins.items():
+                    previous_bins_per_guess[guess][bin] -= occurrences
+                    if previous_bins_per_guess[guess][bin] == 0:
+                        del previous_bins_per_guess[guess][bin]
 
         if len(guesses) <= Metric.MINIMUM_SUBPROCESS_CHUNK_SIZE or (Metric.MAX_CORES or 1) <= 1:
             optimal_guesses, optimum = self.optimal_guesses_for_chunk(guesses, feasible_solutions)
+            return sorted(optimal_guesses)
         else:
-            chunk_size = max(Metric.MINIMUM_SUBPROCESS_CHUNK_SIZE, len(guesses) // (Metric.MAX_CORES or multiprocessing.cpu_count()))
-            chunks = [guesses[i: i + chunk_size] for i in range(0, len(guesses), chunk_size)]
-            async_results: list[ApplyResult] = []
-            pool = multiprocessing.Pool(processes=len(chunks))
+            if not is_first_turn or Game.TURN_1_CACHE is None:
+                chunk_size = max(Metric.MINIMUM_SUBPROCESS_CHUNK_SIZE, len(guesses) // (Metric.MAX_CORES or multiprocessing.cpu_count()))
+                chunks = [guesses[i: i + chunk_size] for i in range(0, len(guesses), chunk_size)]
+                async_results: list[ApplyResult] = []
+                pool = multiprocessing.Pool(processes=len(chunks))
 
-            for chunk in chunks:
-                async_results.append(pool.apply_async(func=self.optimal_guesses_for_chunk, args=(chunk, feasible_solutions)))
-            pool.close()
-            pool.join()
+                for chunk in chunks:
+                    async_results.append(pool.apply_async(func=Game.get_bins_many, args=(chunk, feasible_solutions)))
+                pool.close()
+                pool.join()
 
-            results: list[tuple[list[str], float]] = [result.get() for result in async_results]
+                # Merge all the bins together
+                results: list[dict[str, dict[int, int]]] = [result.get() for result in async_results]
+                bins_per_guess: dict[str, dict[int, int]] = {}
+                for result in results:
+                    bins_per_guess.update(result)
+
+                if is_first_turn:
+                    Game.TURN_1_CACHE = bins_per_guess
+                    Game.TURN_1_CACHE_PREVIOUS_SOLUTION = None
+            else:
+                assert previous_bins_per_guess is not None
+                bins_per_guess = previous_bins_per_guess
+
             optimum, optimal_guesses = math.inf, []
 
-            for (guesses, local_optimum) in results:
-                if local_optimum < optimum:
-                    optimum = local_optimum
-                    optimal_guesses = guesses
-                elif local_optimum == optimum:
-                    optimal_guesses += guesses
+            for (guess, bins) in bins_per_guess.items():
+                value = self.evaluate(guess, feasible_solutions, bins)
+                if value < optimum:
+                    optimum = value
+                    optimal_guesses = [guess]
+                elif value == optimum:
+                    optimal_guesses.append(guess)
 
-        logger.info(f"Done getting optimal guesses")
+        logger.debug(f"Done getting optimal guesses")
         return sorted(optimal_guesses)
 
 
 @register_metric
 class Paranoid(Metric):
-    def evaluate(self, guess: str, feasible_solutions: list[str]) -> float:
-        return max(Game.get_bins(guess, solutions=feasible_solutions).values())
+    def evaluate(self, guess: str, feasible_solutions: list[str], bins: dict[int, int] = None) -> float:
+        bins = bins if bins else Game.get_bins(guess, solutions=feasible_solutions)
+        return max(bins.values())
 
 
 @register_metric
 class Pattern(Metric):
-    def evaluate(self, guess: str, feasible_solutions: list[str]) -> float:
-        return -len(Game.get_bins(guess, solutions=feasible_solutions))
+    def evaluate(self, guess: str, feasible_solutions: list[str], bins: dict[int, int] = None) -> float:
+        bins = bins if bins else Game.get_bins(guess, solutions=feasible_solutions)
+        return -len(bins)
 
 
 @register_metric
 class Deviation(Metric):
-    def evaluate(self, guess: str, feasible_solutions: list[str]) -> float:
-        values = Game.get_bins(guess, solutions=feasible_solutions).values()
+    def evaluate(self, guess: str, feasible_solutions: list[str], bins: dict[int, int] = None) -> float:
+        bins = bins if bins else Game.get_bins(guess, solutions=feasible_solutions)
+        values = bins.values()
 
         if len(values) == 1:
             # Only one possible bin: this suggestion provides no information at all.
@@ -142,6 +170,12 @@ class Game:
     TURN_2_CACHE: dict[ColorMask, str] = field(default_factory=dict)
     MAX_TURNS = 6
     WORD_LENGTH = 5
+
+    # We may keep track of computations from a previous Game, if we are doing a full run. Normally it would suffice to simply cache/hard-code a turn 1 starting word;
+    # but when doing a full run with the "truncate solution space" optimization flag turned on, the best starting word will actually vary over time. To avoid having to
+    # compute a large amount of options each Game, we may simply compute it once for the first game and tweak the stats according to the word that gets truncated for the next Game.
+    TURN_1_CACHE_PREVIOUS_SOLUTION: Optional[str] = None
+    TURN_1_CACHE: Optional[dict[str, dict[ColorMask, int]]] = None
 
     def __init__(self, guesses: list[str], solutions: list[str], solution: str = None, hard: bool = False, metric: Type[Metric] = Paranoid):
         self.turns = []
@@ -224,12 +258,21 @@ class Game:
         return colors
 
     @staticmethod
-    def get_bins(guess: str, solutions: list[str]):
-        bins: collections.defaultdict = collections.defaultdict(lambda: 0)
+    def get_bins(guess: str, solutions: list[str]) -> dict[int, int]:
+        bins: dict[int, int] = {i: 0 for i in range(1 << 2*Game.WORD_LENGTH)}
         for solution in solutions:
             bins[Game.get_color_mask(guess, solution)] += 1
 
-        return bins
+        return {key: value for key, value in bins.items() if value > 0}
+
+    @staticmethod
+    def get_bins_many(guesses: list[str], solutions: list[str]) -> dict[str, dict[int, int]]:
+        bins_per_guess: dict[str, dict[int, int]] = {}
+
+        for guess in guesses:
+            bins_per_guess[guess] = Game.get_bins(guess, solutions)
+
+        return bins_per_guess
 
     def _filter_feasible_solutions(self, turn_index: int = None) -> None:
         """Filter the internal list of feasible solutions based on the hints given in turn `turn_index`."""
@@ -255,7 +298,7 @@ class Game:
             self._all_guesses = self._filter_words_based_on_color_mask(self._all_guesses, guess, color_mask, counts)
 
     def get_best_guesses(self):
-        best_guesses = self.metric().get_optimal_guesses(self._all_guesses, self._feasible_solutions)
+        best_guesses = self.metric().get_optimal_guesses(self._all_guesses, self._feasible_solutions, len(self.turns) == 0)
 
         # If we have multiple equivalent guesses, but some lie in the solution set and some don't, then prefer the ones in the solution set.
         # They are equivalent but maybe picking a solution guess leads to a lucky win!
@@ -403,6 +446,9 @@ def main(metric: str, interactive: bool = False, solution: str = None, full: boo
             else:
                 distribution[0] += 1
                 failed_words.append(solution)
+
+            if "full_truncate_solutions" in kwargs:
+                Game.TURN_1_CACHE_PREVIOUS_SOLUTION = solution
 
             print(f"{terminal.clear}Played game {terminal.yellow}{i}{terminal.normal} with solution {terminal.bold_green}{solution}{terminal.normal}")
             print(game)
