@@ -44,6 +44,8 @@ class Metric(ABC):
     MINIMUM_SUBPROCESS_CHUNK_SIZE: int = 100
     # How many CPU cores may be used when evaluating. Defaults to all available.
     MAX_CORES: Optional[int] = None
+    # Some metrics have different behaviour based on which turn it is.
+    TURNS_PLAYED: int = 0
 
     @abstractmethod
     def evaluate(self, guess: str, feasible_solutions: list[str], bins: dict[int, int] = None) -> float:
@@ -203,13 +205,20 @@ class PercentileEntropy(Metric):
 
 @register_metric
 class ParanoidThenPattern(Metric):
-    TURNS_PLAYED: int = 0
-
     def evaluate(self, guess: str, feasible_solutions: list[str], bins: dict[int, int] = None) -> float:
-        if ParanoidThenPattern.TURNS_PLAYED <= 1:
+        if Metric.TURNS_PLAYED <= 1:
             return Paranoid().evaluate(guess, feasible_solutions, bins)
 
         return Pattern().evaluate(guess, feasible_solutions, bins)
+
+
+@register_metric
+class PatternThenParanoid(Metric):
+    def evaluate(self, guess: str, feasible_solutions: list[str], bins: dict[int, int] = None) -> float:
+        if Metric.TURNS_PLAYED <= 1:
+            return Pattern().evaluate(guess, feasible_solutions, bins)
+
+        return Paranoid().evaluate(guess, feasible_solutions, bins)
 
 
 class Game:
@@ -417,8 +426,7 @@ class Game:
         self.turns.append((guess, hints))
         self._filter_feasible_solutions()
 
-        if self.metric == ParanoidThenPattern:
-            ParanoidThenPattern.TURNS_PLAYED += 1
+        Metric.TURNS_PLAYED += 1
 
         if guess == self.solution:
             logger.info('Game solved!')
@@ -521,6 +529,7 @@ def main(metric: str, interactive: bool = False, solution: str = None, full: boo
         distribution = {i: 0 for i in range(Game.MAX_TURNS + 1)}
 
         for i, solution in enumerate(copy.deepcopy(_all_solutions)):
+            Metric.TURNS_PLAYED = 0
             game_options["solution"] = solution
             game = Game(**game_options).play(_all_guesses, interactive)
 
