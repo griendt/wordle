@@ -196,9 +196,9 @@ class PercentileEntropy(Metric):
         assert 0 < self.PERCENTILE <= 100
         bins = bins if bins else Game.get_bins(guess, solutions=feasible_solutions)
         values = bins.values()
-        information_bits = sorted([-math.log(value/len(feasible_solutions), 2) for value in values], reverse=True)
+        information_bits = sorted([-math.log(value / len(feasible_solutions), 2) for value in values], reverse=True)
 
-        return -information_bits[math.ceil(len(information_bits)*(self.PERCENTILE/100)) - 1]
+        return -information_bits[math.ceil(len(information_bits) * (self.PERCENTILE / 100)) - 1]
 
 
 class Game:
@@ -235,7 +235,7 @@ class Game:
         self.metric = metric
 
     def __str__(self):
-        return "\n".join([f"{turn[0]} {self.color_mask_visual(turn[1])}" for turn in self.turns]) + "\n"*(self.MAX_TURNS - len(self.turns)) + f"\nGuess space: {len(self._all_guesses)}, solution space: {len(self._all_solutions)}"
+        return "\n".join([f"{turn[0]} {self.color_mask_visual(turn[1])}" for turn in self.turns]) + "\n" * (self.MAX_TURNS - len(self.turns)) + f"\nGuess space: {len(self._all_guesses)}, solution space: {len(self._all_solutions)}"
 
     @property
     def num_turns(self):
@@ -474,7 +474,7 @@ def main(metric: str, interactive: bool = False, solution: str = None, full: boo
             results.append(str(key) + ":    |" + "■" * math.ceil(80 * distribution[key] / biggest_bin_size) + " " + str(distribution[key]))
 
         results.append(terminal.red_bold + "Lost: |" + "■" * math.ceil(80 * distribution[0] / biggest_bin_size) + " " + str(distribution[0]) + terminal.normal)
-        results.append("Running average win: " + ("%.4f" % (sum([key*distribution[key] for key in range(1, 7)]) / sum([distribution[key] for key in range(1, 7)]))))
+        results.append("Running average win: " + ("%.4f" % (sum([key * distribution[key] for key in range(1, 7)]) / sum([distribution[key] for key in range(1, 7)]))))
 
         return terminal.yellow + "\n".join(results) + terminal.normal
 
