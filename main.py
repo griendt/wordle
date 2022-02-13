@@ -520,10 +520,11 @@ def main(metric: str, interactive: bool = False, solution: str = None, full: boo
             if kwargs.get("full_truncate_solutions"):
                 Game.TURN_1_CACHE_PREVIOUS_SOLUTION = solution
 
-            print(f"{terminal.clear}Played game {terminal.yellow}{i}{terminal.normal} with solution {terminal.bold_green}{solution}{terminal.normal}")
-            print(game)
-            print(progress_bar(i, num_solutions))
-            print(turn_distribution_bars(distribution))
+            if not kwargs.get("silent") or i % 100 == 0:
+                print(f"{terminal.clear}Played game {terminal.yellow}{i}{terminal.normal} with solution {terminal.bold_green}{solution}{terminal.normal}")
+                print(game)
+                print(progress_bar(i, num_solutions))
+                print(turn_distribution_bars(distribution))
 
             if kwargs.get("full_truncate_solutions"):
                 _all_solutions.remove(solution)
@@ -552,6 +553,7 @@ def parse_args():
         "--full-truncate-solutions": {"action": "store_true", "help": "If set, and a full run is being done, words that are already seen as solutions will be truncated from the solution space in subsequent games."},
         "--only-solution-set": {"action": "store_true", "help": "If set, only words in the solution set will be played at all times."},
         "--metric-entropy-percentile": {"type": float, "default": None, "help": "The percentile (0-100) to use when using the PercentileEntropy metric. Note that 100th percentile is effectively equivalent to the Paranoid metric."},
+        "--silent": {"action": "store_true", "help": "Suppress output during full runs, giving output only once every 100 games."},
     }
 
     parser = argparse.ArgumentParser()
