@@ -14,7 +14,7 @@ from dataclasses import field
 from enum import Enum
 from multiprocessing.pool import ApplyResult
 from random import randint
-from typing import Optional, final, Type, Any
+from typing import Optional, final, Type, Any, Counter
 
 import blessings
 
@@ -199,6 +199,17 @@ class PercentileEntropy(Metric):
         information_bits = sorted([-math.log(value / len(feasible_solutions), 2) for value in values], reverse=True)
 
         return -information_bits[math.ceil(len(information_bits) * (self.PERCENTILE / 100)) - 1]
+
+
+@register_metric
+class ParanoidThenPattern(Metric):
+    TURNS_PLAYED: int = 0
+
+    def evaluate(self, guess: str, feasible_solutions: list[str], bins: dict[int, int] = None) -> float:
+        if ParanoidThenPattern.TURNS_PLAYED <= 1:
+            return Paranoid().evaluate(guess, feasible_solutions, bins)
+
+        return Pattern().evaluate(guess, feasible_solutions, bins)
 
 
 class Game:
@@ -405,6 +416,9 @@ class Game:
         hints = list(self.get_bins(guess, [self.solution]).keys())[0]
         self.turns.append((guess, hints))
         self._filter_feasible_solutions()
+
+        if self.metric == ParanoidThenPattern:
+            ParanoidThenPattern.TURNS_PLAYED += 1
 
         if guess == self.solution:
             logger.info('Game solved!')
