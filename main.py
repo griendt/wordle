@@ -183,7 +183,7 @@ class AverageEntropy(Metric):
     def evaluate(self, guess: str, feasible_solutions: list[str], bins: dict[int, int] = None) -> float:
         bins = bins if bins else Game.get_bins(guess, solutions=feasible_solutions)
         values = bins.values()
-        information_bits = [-math.log(value/len(feasible_solutions), 2) for value in values]
+        information_bits = [-math.log(value / len(feasible_solutions), 2) for value in values]
 
         return -sum(information_bits) / len(information_bits)
 
