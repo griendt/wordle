@@ -8,7 +8,7 @@ import copy
 import logging
 import math
 import multiprocessing
-import operator
+import time
 from abc import abstractmethod, ABC
 from dataclasses import field
 from enum import Enum
@@ -424,6 +424,8 @@ class Game:
 
 
 def main(metric: str, interactive: bool = False, solution: str = None, full: bool = False, hard: bool = False, starter: str = None, **kwargs):
+    start_time = time.time()
+
     if kwargs.get("min_subprocess_chunk"):
         Metric.MINIMUM_SUBPROCESS_CHUNK_SIZE = kwargs["min_subprocess_chunk"]
     if kwargs.get("max_cpus"):
@@ -517,6 +519,8 @@ def main(metric: str, interactive: bool = False, solution: str = None, full: boo
 
         if failed_words:
             print(f"Failed words: {failed_words}")
+
+    logger.info(f"Finished in {time.time() - start_time}")
 
 
 def parse_args():
