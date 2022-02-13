@@ -224,6 +224,9 @@ class Game:
     TURN_1_CACHE_PREVIOUS_SOLUTION: Optional[str] = None
     TURN_1_CACHE: Optional[dict[str, dict[ColorMask, int]]] = None
 
+    _COUNTERS_PER_SOLUTION: dict[str, Counter] = None
+    BINS_CACHE: dict[tuple[str, str], ColorMask] = None
+
     def __init__(self, guesses: list[str], solutions: list[str], solution: str = None, hard: bool = False, metric: Type[Metric] = Paranoid):
         self.turns = []
         self.solution = solution
@@ -233,6 +236,8 @@ class Game:
         self._turn_computed = 0
         self.is_hard_mode = hard
         self.metric = metric
+
+        Game._COUNTERS_PER_SOLUTION = {solution: collections.Counter(solution) for solution in solutions}
 
     def __str__(self):
         return "\n".join([f"{turn[0]} {self.color_mask_visual(turn[1])}" for turn in self.turns]) + "\n" * (self.MAX_TURNS - len(self.turns)) + f"\nGuess space: {len(self._all_guesses)}, solution space: {len(self._all_solutions)}"
@@ -288,29 +293,37 @@ class Game:
         return words
 
     @staticmethod
-    def get_color_mask(guess: str, solution: str) -> int:
-        colors = 0
-        counts_per_letter = collections.Counter(solution)
-
-        for i in range(5):
-            if solution[i] == guess[i]:
-                colors += (1 << i)
-                counts_per_letter[guess[i]] -= 1
-
-        for i in range(5):
-            if solution[i] != guess[i] and guess[i] in solution and counts_per_letter[guess[i]] > 0:
-                counts_per_letter[guess[i]] -= 1
-                colors += (1 << (i + 5))
-
-        return colors
-
-    @staticmethod
     def get_bins(guess: str, solutions: list[str]) -> dict[int, int]:
-        bins: dict[int, int] = {i: 0 for i in range(1 << 2*Game.WORD_LENGTH)}
-        for solution in solutions:
-            bins[Game.get_color_mask(guess, solution)] += 1
+        bins: dict[int, int] = {}
 
-        return {key: value for key, value in bins.items() if value > 0}
+        for solution in solutions:
+            try:
+                colors = Game.BINS_CACHE[(guess, solution)]
+            except KeyError:
+                letters_seen: dict[str, int] = {}
+                colors = 0
+
+                for i in range(Game.WORD_LENGTH):
+                    guess_letter, solution_letter = guess[i], solution[i]
+
+                    if guess_letter == solution_letter:
+                        colors += (1 << i)
+                        letters_seen.setdefault(guess_letter, 0)
+                        letters_seen[guess_letter] += 1
+
+                for i in range(Game.WORD_LENGTH):
+                    guess_letter, solution_letter = guess[i], solution[i]
+                    if guess_letter != solution_letter and guess_letter in solution and letters_seen.get(guess_letter, 0) < Game._COUNTERS_PER_SOLUTION[solution][guess_letter]:
+                        letters_seen.setdefault(guess_letter, 0)
+                        letters_seen[guess_letter] += 1
+                        colors += (1 << (i + 5))
+
+                Game.BINS_CACHE[(guess, solution)] = colors
+
+            bins.setdefault(colors, 0)
+            bins[colors] += 1
+
+        return bins
 
     @staticmethod
     def get_bins_many(guesses: list[str], solutions: list[str]) -> dict[str, dict[int, int]]:
@@ -455,6 +468,8 @@ def main(metric: str, interactive: bool = False, solution: str = None, full: boo
         Game.TURN_1_GUESS = starter
 
     Game.TURN_2_CACHE = {}
+    Game.BINS_CACHE = {}
+
     failed_words: list[str] = []
     game_options: dict[str, Any] = {
         "guesses": _all_guesses,
