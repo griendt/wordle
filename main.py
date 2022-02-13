@@ -354,17 +354,12 @@ class Game:
 
         return bins_per_guess
 
-    def _filter_feasible_solutions(self, turn_index: int = None) -> None:
-        """Filter the internal list of feasible solutions based on the hints given in turn `turn_index`."""
-        if turn_index is None:
-            # If not specified, assume the last played turn.
-            turn_index = self.num_turns - 1
-
-        if self.num_turns < turn_index:
-            # Cannot filter based on a turn that was not yet played!
+    def _filter_feasible_solutions(self) -> None:
+        """Filter the internal list of feasible solutions based on the hints given in the last played turn."""
+        if not self.turns:
             return
 
-        guess, color_mask = self.turns[turn_index]
+        guess, color_mask = self.turns[-1]
         counts: dict[tuple[str, Color], int] = collections.defaultdict(lambda: 0)
 
         for index, letter in enumerate(guess):
