@@ -6,7 +6,6 @@ import argparse
 import collections
 import copy
 import logging
-import math
 import multiprocessing
 import time
 from random import randint
@@ -15,9 +14,9 @@ from typing import Any
 # Define ColorMask type for clearer type hinting
 import cache
 import metrics
+from cli import terminal, logger, progress_bar, turn_distribution_bars
 from game import Game, Color
 from metrics import available_metrics
-from cli import terminal, logger, progress_bar, turn_distribution_bars
 
 ColorMask = int
 
@@ -144,4 +143,3 @@ def parse_args():
 if __name__ == "__main__":
     RED, GREEN, YELLOW = Color.RED, Color.GREEN, Color.YELLOW
     main(**parse_args())
-
