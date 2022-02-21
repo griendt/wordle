@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import collections
 import copy
 import logging
 import math
@@ -16,7 +17,7 @@ import cache
 import metrics
 from game import Game, Color
 from metrics import available_metrics
-from cli import terminal, logger
+from cli import terminal, logger, progress_bar, turn_distribution_bars
 
 ColorMask = int
 
@@ -57,6 +58,7 @@ def main(metric: str, interactive: bool = False, solution: str = None, full: boo
 
     cache.TURN_2_CACHE = {}
     cache.BUCKETS_CACHE = {}
+    cache.COUNTERS_PER_SOLUTION = {solution: collections.Counter(solution) for solution in _all_solutions}
 
     failed_words: list[str] = []
     game_options: dict[str, Any] = {
@@ -66,22 +68,6 @@ def main(metric: str, interactive: bool = False, solution: str = None, full: boo
         "hard": hard,
         "metric": available_metrics[metric],
     }
-
-    def progress_bar(current: int, total: int) -> str:
-        assert 0 <= current <= total
-        return "|" + "■" * (80 * current // total) + " " * (80 - (80 * current // total)) + "| " + ("%.2f" % (100 * current / total)) + "%"
-
-    def turn_distribution_bars(distribution: dict[int, int]) -> str:
-        results: list[str] = []
-        biggest_bucket_size = max(distribution.values()) or 1
-
-        for key in range(1, 7):
-            results.append(str(key) + ":    |" + "■" * math.ceil(80 * distribution[key] / biggest_bucket_size) + " " + str(distribution[key]))
-
-        results.append(terminal.red_bold + "Lost: |" + "■" * math.ceil(80 * distribution[0] / biggest_bucket_size) + " " + str(distribution[0]) + terminal.normal)
-        results.append("Running average win: " + ("%.4f" % (sum([key * distribution[key] for key in range(1, 7)]) / sum([distribution[key] for key in range(1, 7)]))))
-
-        return terminal.yellow + "\n".join(results) + terminal.normal
 
     if not full:
         if not solution:
@@ -118,7 +104,6 @@ def main(metric: str, interactive: bool = False, solution: str = None, full: boo
             if kwargs.get("full_truncate_solutions"):
                 _all_solutions.remove(solution)
 
-        print(distribution)
         print("Average turns per win: " + str(
             sum([key * value for key, value in distribution.items() if isinstance(key, int)]) / sum([value for value in distribution.values()])))
 

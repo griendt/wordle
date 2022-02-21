@@ -12,5 +12,5 @@ TURN_2_CACHE: dict[ColorMask, str] = field(default_factory=dict)
 TURN_1_CACHE_PREVIOUS_SOLUTION: Optional[str] = None
 TURN_1_CACHE: Optional[dict[str, dict[ColorMask, int]]] = None
 
-COUNTERS_PER_SOLUTION: dict[str, Counter] = None
-BUCKETS_CACHE: dict[tuple[str, str], ColorMask] = None
+COUNTERS_PER_SOLUTION: dict[str, Counter] = {}
+BUCKETS_CACHE: dict[tuple[str, str], ColorMask] = {}

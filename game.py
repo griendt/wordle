@@ -6,8 +6,8 @@ from typing import Optional, Type
 
 import cache
 import metrics
-from cli import terminal, logger
 from buckets import get_buckets
+from cli import terminal, logger
 
 ColorMask = int
 
@@ -54,8 +54,6 @@ class Game:
         self._turn_computed = 0
         self.is_hard_mode = hard
         self.metric = metric
-
-        cache.COUNTERS_PER_SOLUTION = {solution: collections.Counter(solution) for solution in solutions}
 
     def __str__(self):
         return "\n".join([f"{turn[0]} {color_mask_visual(turn[1])}" for turn in self.turns]) + "\n" * (self.MAX_TURNS - len(self.turns)) + f"\nGuess space: {len(self._all_guesses)}, solution space: {len(self._all_solutions)}"
