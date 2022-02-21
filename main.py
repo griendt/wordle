@@ -3,467 +3,38 @@
 from __future__ import annotations
 
 import argparse
-import collections
 import copy
 import logging
 import math
 import multiprocessing
 import time
-from abc import abstractmethod, ABC
-from dataclasses import field
-from enum import Enum
-from multiprocessing.pool import ApplyResult
 from random import randint
-from typing import Optional, final, Type, Any, Counter
-
-import blessings
+from typing import Any
 
 # Define ColorMask type for clearer type hinting
+import cache
+import metrics
+from game import Game, Color
+from metrics import available_metrics
+from cli import terminal, logger
+
 ColorMask = int
-metrics: dict[str, Type[Metric]] = {}
 
 # Escape sequence to clear the terminal screen
 clear: str = "\033c"
-terminal: blessings.Terminal = blessings.Terminal()
-
-
-def register_metric(cls):
-    assert issubclass(cls, Metric)
-    metrics[str(cls())] = cls
-    return cls
-
-
-class Color(Enum):
-    RED = "🟥"
-    GREEN = "🟩"
-    YELLOW = "🟨"
-
-
-class Metric(ABC):
-    # How many guesses need evaluation before we decide to spawn subprocesses for parallel computation.
-    MINIMUM_SUBPROCESS_CHUNK_SIZE: int = 100
-    # How many CPU cores may be used when evaluating. Defaults to all available.
-    MAX_CORES: Optional[int] = None
-    # Some metrics have different behaviour based on which turn it is.
-    TURNS_PLAYED: int = 0
-
-    @abstractmethod
-    def evaluate(self, guess: str, feasible_solutions: list[str], bins: dict[int, int] = None) -> float:
-        raise NotImplementedError
-
-    @final
-    def __str__(self):
-        return type(self).__name__
-
-    @final
-    def optimal_guesses_for_chunk(self, guess_chunk: list[str], feasible_solutions: list[str]) -> tuple[list[str], float]:
-        _optimum, _optimal_guesses = math.inf, []
-        for guess in guess_chunk:
-            evaluation = self.evaluate(guess, feasible_solutions)
-            if evaluation > _optimum:
-                continue
-
-            if evaluation < _optimum:
-                _optimum = evaluation
-                _optimal_guesses = [guess]
-            elif evaluation == _optimum:
-                _optimal_guesses.append(guess)
-
-        return _optimal_guesses, _optimum
-
-    @final
-    def get_optimal_guesses(self, guesses: list[str], feasible_solutions: list[str], is_first_turn: bool) -> list[str]:
-        logger.debug(f"Getting optimal guesses; guess list contains {len(guesses)} words and solutions contain {len(feasible_solutions)} words")
-
-        previous_bins_per_guess: Optional[dict[str, dict[ColorMask, int]]] = None
-        if is_first_turn and Game.TURN_1_CACHE is not None and Game.TURN_1_CACHE_PREVIOUS_SOLUTION is not None:
-            previous_solution, previous_bins_per_guess = Game.TURN_1_CACHE_PREVIOUS_SOLUTION, Game.TURN_1_CACHE
-
-            for guess, bins in Game.get_bins_many(guesses, [previous_solution]).items():
-                for bin, occurrences in bins.items():
-                    previous_bins_per_guess[guess][bin] -= occurrences
-                    if previous_bins_per_guess[guess][bin] == 0:
-                        del previous_bins_per_guess[guess][bin]
-
-        if len(guesses) <= Metric.MINIMUM_SUBPROCESS_CHUNK_SIZE or (Metric.MAX_CORES or 1) <= 1:
-            optimal_guesses, optimum = self.optimal_guesses_for_chunk(guesses, feasible_solutions)
-            return sorted(optimal_guesses)
-
-        chunk_size = max(Metric.MINIMUM_SUBPROCESS_CHUNK_SIZE, len(guesses) // (Metric.MAX_CORES or multiprocessing.cpu_count()))
-        chunks = [guesses[i: i + chunk_size] for i in range(0, len(guesses), chunk_size)]
-        optimum, optimal_guesses = math.inf, []
-        results: list[tuple[list[str], float]] = []
-
-        if is_first_turn and Game.TURN_1_CACHE is None:
-            async_results: list[ApplyResult] = []
-            pool = multiprocessing.Pool(processes=len(chunks))
-
-            for chunk in chunks:
-                async_results.append(pool.apply_async(func=Game.get_bins_many, args=(chunk, feasible_solutions)))
-            pool.close()
-            pool.join()
-
-            # Merge all the bins together
-            awaited_results: list[dict[str, dict[int, int]]] = [result.get() for result in async_results]
-            bins_per_guess: dict[str, dict[int, int]] = {}
-            for result in awaited_results:
-                bins_per_guess.update(result)
-
-            Game.TURN_1_CACHE = bins_per_guess
-            Game.TURN_1_CACHE_PREVIOUS_SOLUTION = None
-
-        if is_first_turn and Game.TURN_1_CACHE is not None and Game.TURN_1_CACHE_PREVIOUS_SOLUTION is not None:
-            assert previous_bins_per_guess is not None
-            bins_per_guess = previous_bins_per_guess
-
-            for (guess, bins) in bins_per_guess.items():
-                value = self.evaluate(guess, feasible_solutions, bins)
-                if value < optimum:
-                    optimum = value
-                    optimal_guesses = [guess]
-                elif value == optimum:
-                    optimal_guesses.append(guess)
-
-            return sorted(optimal_guesses)
-
-        if len(chunks) > 1:
-            async_results: list[ApplyResult] = []
-            pool = multiprocessing.Pool(processes=len(chunks))
-            for chunk in chunks:
-                async_results.append(pool.apply_async(func=self.optimal_guesses_for_chunk, args=(chunk, feasible_solutions)))
-            pool.close()
-            pool.join()
-
-            # Merge all the bins together
-            results = [result.get() for result in async_results]
-        else:
-            results = [self.optimal_guesses_for_chunk(chunks[0], feasible_solutions)]
-
-        for (guesses, local_optimum) in results:
-            if local_optimum < optimum:
-                optimum = local_optimum
-                optimal_guesses = guesses
-            elif local_optimum == optimum:
-                optimal_guesses += guesses
-
-        logger.debug(f"Done getting optimal guesses")
-        return sorted(optimal_guesses)
-
-
-@register_metric
-class Paranoid(Metric):
-    def evaluate(self, guess: str, feasible_solutions: list[str], bins: dict[int, int] = None) -> float:
-        bins = bins if bins else Game.get_bins(guess, solutions=feasible_solutions)
-        return max(bins.values())
-
-
-@register_metric
-class Pattern(Metric):
-    def evaluate(self, guess: str, feasible_solutions: list[str], bins: dict[int, int] = None) -> float:
-        bins = bins if bins else Game.get_bins(guess, solutions=feasible_solutions)
-        return -len(bins)
-
-
-@register_metric
-class Deviation(Metric):
-    def evaluate(self, guess: str, feasible_solutions: list[str], bins: dict[int, int] = None) -> float:
-        bins = bins if bins else Game.get_bins(guess, solutions=feasible_solutions)
-        values = bins.values()
-
-        if len(values) == 1:
-            # Only one possible bin: this suggestion provides no information at all.
-            return math.inf
-
-        average_population = sum(values) / len(values)
-
-        # Since square root is monotone, we do not need to compute it in order to compare guesses with one another.
-        return sum([(value - average_population) ** 2 for value in values]) / (len(values) - 1)
-
-
-@register_metric
-class AverageEntropy(Metric):
-    def evaluate(self, guess: str, feasible_solutions: list[str], bins: dict[int, int] = None) -> float:
-        bins = bins if bins else Game.get_bins(guess, solutions=feasible_solutions)
-        values = bins.values()
-        information_bits = [-math.log(value / len(feasible_solutions), 2) for value in values]
-
-        return -sum(information_bits) / len(information_bits)
-
-
-@register_metric
-class PercentileEntropy(Metric):
-    PERCENTILE: float = 0
-
-    def evaluate(self, guess: str, feasible_solutions: list[str], bins: dict[int, int] = None) -> float:
-        assert 0 < self.PERCENTILE <= 100
-        bins = bins if bins else Game.get_bins(guess, solutions=feasible_solutions)
-        values = bins.values()
-        information_bits = sorted([-math.log(value / len(feasible_solutions), 2) for value in values], reverse=True)
-
-        return -information_bits[math.ceil(len(information_bits) * (self.PERCENTILE / 100)) - 1]
-
-
-@register_metric
-class ParanoidThenPattern(Metric):
-    def evaluate(self, guess: str, feasible_solutions: list[str], bins: dict[int, int] = None) -> float:
-        if Metric.TURNS_PLAYED <= 1:
-            return Paranoid().evaluate(guess, feasible_solutions, bins)
-
-        return Pattern().evaluate(guess, feasible_solutions, bins)
-
-
-@register_metric
-class PatternThenParanoid(Metric):
-    def evaluate(self, guess: str, feasible_solutions: list[str], bins: dict[int, int] = None) -> float:
-        if Metric.TURNS_PLAYED <= 1:
-            return Pattern().evaluate(guess, feasible_solutions, bins)
-
-        return Paranoid().evaluate(guess, feasible_solutions, bins)
-
-
-class Game:
-    turns: list[tuple[str, ColorMask]]
-    solution: Optional[str]
-    is_hard_mode: bool = False
-    metric: Type[Metric] = Paranoid
-
-    _all_guesses: list[str]
-    _all_solutions: list[str]
-    _feasible_solutions: list[str]
-    _turn_computed: int
-
-    # The word to use for turn 1. Examples are "raise" for paranoid, "salet" for pattern metrics.
-    TURN_1_GUESS: Optional[str] = None
-    TURN_2_CACHE: dict[ColorMask, str] = field(default_factory=dict)
-    MAX_TURNS = 6
-    WORD_LENGTH = 5
-
-    # We may keep track of computations from a previous Game, if we are doing a full run. Normally it would suffice to simply cache/hard-code a turn 1 starting word;
-    # but when doing a full run with the "truncate solution space" optimization flag turned on, the best starting word will actually vary over time. To avoid having to
-    # compute a large amount of options each Game, we may simply compute it once for the first game and tweak the stats according to the word that gets truncated for the next Game.
-    TURN_1_CACHE_PREVIOUS_SOLUTION: Optional[str] = None
-    TURN_1_CACHE: Optional[dict[str, dict[ColorMask, int]]] = None
-
-    _COUNTERS_PER_SOLUTION: dict[str, Counter] = None
-    BINS_CACHE: dict[tuple[str, str], ColorMask] = None
-
-    def __init__(self, guesses: list[str], solutions: list[str], solution: str = None, hard: bool = False, metric: Type[Metric] = Paranoid):
-        self.turns = []
-        self.solution = solution
-        self._all_guesses = guesses
-        self._all_solutions = solutions
-        self._feasible_solutions = solutions
-        self._turn_computed = 0
-        self.is_hard_mode = hard
-        self.metric = metric
-
-        Game._COUNTERS_PER_SOLUTION = {solution: collections.Counter(solution) for solution in solutions}
-
-    def __str__(self):
-        return "\n".join([f"{turn[0]} {self.color_mask_visual(turn[1])}" for turn in self.turns]) + "\n" * (self.MAX_TURNS - len(self.turns)) + f"\nGuess space: {len(self._all_guesses)}, solution space: {len(self._all_solutions)}"
-
-    @property
-    def num_turns(self):
-        return len(self.turns)
-
-    @property
-    def is_finished(self):
-        return self.num_turns == self.MAX_TURNS or self.is_won
-
-    @property
-    def is_won(self):
-        return self.turns and self.turns[-1][1] == 2 ** self.WORD_LENGTH - 1
-
-    @staticmethod
-    def color_mask_visual(color_mask: ColorMask) -> str:
-        colors = ""
-        for i in range(5):
-            if color_mask & (1 << i):
-                colors += Color.GREEN.value
-            elif color_mask & (1 << (i + 5)):
-                colors += Color.YELLOW.value
-            else:
-                colors += Color.RED.value
-
-        return colors
-
-    @staticmethod
-    def _filter_words_based_on_color_mask(words: list[str], guess: str, color_mask: ColorMask, counts: dict[tuple[str, Color], int]) -> list[str]:
-        for i in range(5):
-            if color_mask & (1 << i):
-                # This index is marked green
-                words = [word for word in words if word[i] == guess[i]]
-            elif color_mask & (1 << (i + 5)):
-                # This index is marked yellow
-                words = [word for word in words if (
-                    # Amount of occurrences of the letter must be at least equal to the amount of green+yellows of that letter;
-                    # the yellow hint does not exclude that there may be more occurrences in the target word.
-                        len([letter for letter in word if letter == guess[i]]) >= counts[(guess[i], GREEN)] + counts[(guess[i], YELLOW)]
-                        and word[i] != guess[i]
-                )]
-            else:
-                # This index is marked gray
-                words = [word for word in words if (
-                    # Amount of occurrences of the letter should be exactly equal to the amount of greens+yellows of that letter;
-                    # the white hint denotes that no more occurrences can be present in the target word.
-                        len([letter for letter in word if letter == guess[i]]) == counts[(guess[i], GREEN)] + counts[(guess[i], YELLOW)]
-                        and word[i] != guess[i]
-                )]
-
-        return words
-
-    @staticmethod
-    def get_bins(guess: str, solutions: list[str]) -> dict[int, int]:
-        bins: dict[int, int] = {}
-
-        for solution in solutions:
-            try:
-                colors = Game.BINS_CACHE[(guess, solution)]
-            except KeyError:
-                letters_seen: dict[str, int] = {}
-                colors = 0
-
-                for i in range(Game.WORD_LENGTH):
-                    guess_letter, solution_letter = guess[i], solution[i]
-
-                    if guess_letter == solution_letter:
-                        colors += (1 << i)
-                        letters_seen.setdefault(guess_letter, 0)
-                        letters_seen[guess_letter] += 1
-
-                for i in range(Game.WORD_LENGTH):
-                    guess_letter, solution_letter = guess[i], solution[i]
-                    if guess_letter != solution_letter and guess_letter in solution and letters_seen.get(guess_letter, 0) < Game._COUNTERS_PER_SOLUTION[solution][guess_letter]:
-                        letters_seen.setdefault(guess_letter, 0)
-                        letters_seen[guess_letter] += 1
-                        colors += (1 << (i + 5))
-
-                Game.BINS_CACHE[(guess, solution)] = colors
-
-            bins.setdefault(colors, 0)
-            bins[colors] += 1
-
-        return bins
-
-    @staticmethod
-    def get_bins_many(guesses: list[str], solutions: list[str]) -> dict[str, dict[int, int]]:
-        bins_per_guess: dict[str, dict[int, int]] = {}
-
-        for guess in guesses:
-            bins_per_guess[guess] = Game.get_bins(guess, solutions)
-
-        return bins_per_guess
-
-    def _filter_feasible_solutions(self) -> None:
-        """Filter the internal list of feasible solutions based on the hints given in the last played turn."""
-        if not self.turns:
-            return
-
-        guess, color_mask = self.turns[-1]
-        counts: dict[tuple[str, Color], int] = collections.defaultdict(lambda: 0)
-
-        for index, letter in enumerate(guess):
-            if color_mask & (1 << index) != 0:
-                counts[(letter, Color.GREEN)] += 1
-            elif color_mask & (1 << (index + self.WORD_LENGTH)) != 0:
-                counts[(letter, Color.YELLOW)] += 1
-
-        self._feasible_solutions = self._filter_words_based_on_color_mask(self._feasible_solutions, guess, color_mask, counts)
-        if self.is_hard_mode:
-            self._all_guesses = self._filter_words_based_on_color_mask(self._all_guesses, guess, color_mask, counts)
-
-    def get_best_guesses(self):
-        best_guesses = self.metric().get_optimal_guesses(self._all_guesses, self._feasible_solutions, len(self.turns) == 0)
-
-        # If we have multiple equivalent guesses, but some lie in the solution set and some don't, then prefer the ones in the solution set.
-        # They are equivalent but maybe picking a solution guess leads to a lucky win!
-        if solution_best_guesses := [guess for guess in best_guesses if guess in self._feasible_solutions]:
-            return solution_best_guesses
-
-        return best_guesses
-
-    def suggest_guess(self) -> str:
-        if len(self._feasible_solutions) == 1:
-            return self._feasible_solutions[0]
-
-        if self.is_hard_mode and len(self._feasible_solutions) <= self.MAX_TURNS - self.num_turns:
-            # There are fewer or equal amount of solutions left as we have turns.
-            # In hard mode, this means we have a guaranteed win; in normal mode, we may decide to play a non-solution word
-            # instead to get to a win faster. But in hard mode this may be a too risky operation; so, for hard mode,
-            # we will simply enumerate the solution words to get a guaranteed win, even if that is not optimal for the amount
-            # of turns needed to get to that win.
-            return self._feasible_solutions[0]
-
-        if self.num_turns == 5:
-            # Desperado for a solution word
-            return self._feasible_solutions[0]
-
-        if self.num_turns == 0 and self.TURN_1_GUESS is not None:
-            # This is the first turn. Use pre-computed best words if available.
-            return self.TURN_1_GUESS
-
-        if self.num_turns == 1 and self.turns[0][0] == self.TURN_1_GUESS:
-            # We have a cached result for these hints after the starter word to play for turn 2, so use that.
-            if self.turns[0][1] in Game.TURN_2_CACHE.keys():
-                logger.info("Using cache")
-                return Game.TURN_2_CACHE[self.turns[0][1]]
-
-            # Compute the best word to use for turn 2 and cache it for when we play more games using the same starter word.
-            guess = self.get_best_guesses()[0]
-            Game.TURN_2_CACHE[self.turns[0][1]] = guess
-            return guess
-
-        return self.get_best_guesses()[0]
-
-    def play_turn(self, guess: str):
-        assert self.solution is not None, "Cannot process turn without knowing the solution"
-        hints = list(self.get_bins(guess, [self.solution]).keys())[0]
-        self.turns.append((guess, hints))
-        self._filter_feasible_solutions()
-
-        Metric.TURNS_PLAYED += 1
-
-        if guess == self.solution:
-            logger.info('Game solved!')
-        elif self.num_turns == 6:
-            logger.warning('Did not find a solution in time.')
-
-    def play(self, guess_list: list[str], interactive: bool = False) -> Game:
-        while not self.is_finished:
-            while True:
-                if interactive:
-                    guess = input("Guess: ")
-                    if guess == "":
-                        logger.debug("Calculating suggested guess...")
-                        guess = self.suggest_guess()
-                        logger.debug(f"Suggested guess: {guess}")
-                        break
-                    elif guess in guess_list:
-                        break
-                else:
-                    guess = self.suggest_guess()
-                    break
-
-                print("Not a valid word, try again.")
-
-            self.play_turn(guess=guess)
-            if interactive and not self.is_finished:
-                print(terminal.clear + str(self) + "\n")
-
-        return self
 
 
 def main(metric: str, interactive: bool = False, solution: str = None, full: bool = False, hard: bool = False, starter: str = None, **kwargs):
     start_time = time.time()
 
     if kwargs.get("min_subprocess_chunk"):
-        Metric.MINIMUM_SUBPROCESS_CHUNK_SIZE = kwargs["min_subprocess_chunk"]
+        metrics.Metric.MINIMUM_SUBPROCESS_CHUNK_SIZE = kwargs["min_subprocess_chunk"]
     if kwargs.get("max_cpus"):
-        Metric.MAX_CORES = kwargs["max_cpus"]
+        metrics.Metric.MAX_CORES = kwargs["max_cpus"]
     if kwargs.get("log_level"):
         logger.setLevel(kwargs["log_level"])
     if kwargs.get("metric_entropy_percentile") is not None:
-        PercentileEntropy.PERCENTILE = kwargs["metric_entropy_percentile"]
+        metrics.PercentileEntropy.PERCENTILE = kwargs["metric_entropy_percentile"]
 
     with open('wordle-words.txt', 'r') as f:
         _all_solutions = [word.strip() for word in f]
@@ -482,10 +53,10 @@ def main(metric: str, interactive: bool = False, solution: str = None, full: boo
     if starter is not None:
         if starter not in _all_guesses:
             raise ValueError("Unrecognized starter word")
-        Game.TURN_1_GUESS = starter
+        cache.TURN_1_GUESS = starter
 
-    Game.TURN_2_CACHE = {}
-    Game.BINS_CACHE = {}
+    cache.TURN_2_CACHE = {}
+    cache.BUCKETS_CACHE = {}
 
     failed_words: list[str] = []
     game_options: dict[str, Any] = {
@@ -493,7 +64,7 @@ def main(metric: str, interactive: bool = False, solution: str = None, full: boo
         "solutions": _all_solutions,
         "solution": solution,
         "hard": hard,
-        "metric": metrics[metric],
+        "metric": available_metrics[metric],
     }
 
     def progress_bar(current: int, total: int) -> str:
@@ -502,12 +73,12 @@ def main(metric: str, interactive: bool = False, solution: str = None, full: boo
 
     def turn_distribution_bars(distribution: dict[int, int]) -> str:
         results: list[str] = []
-        biggest_bin_size = max(distribution.values()) or 1
+        biggest_bucket_size = max(distribution.values()) or 1
 
         for key in range(1, 7):
-            results.append(str(key) + ":    |" + "■" * math.ceil(80 * distribution[key] / biggest_bin_size) + " " + str(distribution[key]))
+            results.append(str(key) + ":    |" + "■" * math.ceil(80 * distribution[key] / biggest_bucket_size) + " " + str(distribution[key]))
 
-        results.append(terminal.red_bold + "Lost: |" + "■" * math.ceil(80 * distribution[0] / biggest_bin_size) + " " + str(distribution[0]) + terminal.normal)
+        results.append(terminal.red_bold + "Lost: |" + "■" * math.ceil(80 * distribution[0] / biggest_bucket_size) + " " + str(distribution[0]) + terminal.normal)
         results.append("Running average win: " + ("%.4f" % (sum([key * distribution[key] for key in range(1, 7)]) / sum([distribution[key] for key in range(1, 7)]))))
 
         return terminal.yellow + "\n".join(results) + terminal.normal
@@ -524,7 +95,7 @@ def main(metric: str, interactive: bool = False, solution: str = None, full: boo
         distribution = {i: 0 for i in range(Game.MAX_TURNS + 1)}
 
         for i, solution in enumerate(copy.deepcopy(_all_solutions)):
-            Metric.TURNS_PLAYED = 0
+            metrics.Metric.TURNS_PLAYED = 0
             game_options["solution"] = solution
             game = Game(**game_options).play(_all_guesses, interactive)
 
@@ -536,7 +107,7 @@ def main(metric: str, interactive: bool = False, solution: str = None, full: boo
                 failed_words.append(solution)
 
             if kwargs.get("full_truncate_solutions"):
-                Game.TURN_1_CACHE_PREVIOUS_SOLUTION = solution
+                cache.TURN_1_CACHE_PREVIOUS_SOLUTION = solution
 
             if not kwargs.get("silent") or i % 100 == 0:
                 print(f"{terminal.clear}Played game {terminal.yellow}{i}{terminal.normal} with solution {terminal.bold_green}{solution}{terminal.normal}")
@@ -562,10 +133,10 @@ def parse_args():
         "--full": {"short": "-f", "action": "store_true", "help": "Perform a full run over all solution words. Useful for determining whether the engine can solve all games. Overrides -s and -i options."},
         "--hard": {"short": "-H", "action": "store_true", "help": "Play in 'hard mode': only guesses allowed that match all previous hints. Does not alter the solving metric."},
         "--interactive": {"short": "-i", "action": "store_true", "help": "Interactive mode: allows the user to enter guesses. Leave a guess blank to let the program decide on a guess."},
-        "--metric": {"default": "Paranoid", "type": str, "help": f"Specify a metric to use for solving the game. Supported values are: {', '.join(metrics.keys())}"},
+        "--metric": {"default": "Paranoid", "type": str, "help": f"Specify a metric to use for solving the game. Supported values are: {', '.join(available_metrics.keys())}"},
         "--solution": {"short": "-s", "default": None, "type": str, "help": "The solution word. If none provided, a random solution word will be chosen."},
-        "--starter": {"short": "-S", "default": Game.TURN_1_GUESS, "type": str, "help": "Specify a starter word."},
-        "--min-subprocess-chunk": {"type": int, "help": "Minimum chunk size for parallel multiprocessing of possible guesses.", "default": Metric.MINIMUM_SUBPROCESS_CHUNK_SIZE},
+        "--starter": {"short": "-S", "default": cache.TURN_1_GUESS, "type": str, "help": "Specify a starter word."},
+        "--min-subprocess-chunk": {"type": int, "help": "Minimum chunk size for parallel multiprocessing of possible guesses.", "default": metrics.Metric.MINIMUM_SUBPROCESS_CHUNK_SIZE},
         "--max-cpus": {"type": int, "help": "Maximum amount of CPUs that may be used. Defaults to all available.", "default": multiprocessing.cpu_count()},
         "--log-level": {"type": str, "help": "Set the log level. Defaults to INFO.", "default": logging.INFO},
         "--full-truncate-solutions": {"action": "store_true", "help": "If set, and a full run is being done, words that are already seen as solutions will be truncated from the solution space in subsequent games."},
@@ -587,9 +158,5 @@ def parse_args():
 
 if __name__ == "__main__":
     RED, GREEN, YELLOW = Color.RED, Color.GREEN, Color.YELLOW
-
-    logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s %(message)s")
-    logger = logging.getLogger("wordle")
-    logger.setLevel(logging.INFO)
-
     main(**parse_args())
+
