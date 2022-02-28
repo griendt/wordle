@@ -12,11 +12,11 @@ from random import randint
 from typing import Any
 
 # Define ColorMask type for clearer type hinting
-import cache
-import metrics
-from cli import terminal, logger, progress_bar, turn_distribution_bars
-from game import Game, Color
-from metrics import available_metrics
+from wordle import cache, metrics
+from wordle.cli import terminal, logger, progress_bar, turn_distribution_bars
+from wordle.color_mask import Color
+from wordle.game import Game
+from wordle.metrics import available_metrics
 
 ColorMask = int
 
@@ -49,6 +49,8 @@ def main(metric: str, interactive: bool = False, solution: str = None, full: boo
     else:
         with open('wordle-fake-words.txt', 'r') as f:
             _all_guesses = sorted(list({word.strip() for word in f}.union(_all_solutions)))
+
+    metrics.Depth2Paranoid.ALL_GUESSES = _all_guesses
 
     if starter is not None:
         if starter not in _all_guesses:

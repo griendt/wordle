@@ -1,34 +1,14 @@
 from __future__ import annotations
 
-import collections
-from enum import Enum
 from typing import Optional, Type
 
-import cache
-import metrics
-from buckets import get_buckets
-from cli import terminal, logger
+from wordle import cache
+from wordle import metrics
+from wordle.buckets import get_buckets
+from wordle.cli import terminal, logger
+from wordle.color_mask import color_mask_visual, filter_feasible_words
 
 ColorMask = int
-
-
-def color_mask_visual(color_mask: ColorMask) -> str:
-    colors = ""
-    for i in range(5):
-        if color_mask & (1 << i):
-            colors += Color.GREEN.value
-        elif color_mask & (1 << (i + 5)):
-            colors += Color.YELLOW.value
-        else:
-            colors += Color.RED.value
-
-    return colors
-
-
-class Color(Enum):
-    RED = "🟥"
-    GREEN = "🟩"
-    YELLOW = "🟨"
 
 
 class Game:
@@ -70,51 +50,8 @@ class Game:
     def is_won(self):
         return self.turns and self.turns[-1][1] == 2 ** self.WORD_LENGTH - 1
 
-    @staticmethod
-    def _filter_words_based_on_color_mask(words: list[str], guess: str, color_mask: ColorMask, counts: dict[tuple[str, Color], int]) -> list[str]:
-        for i in range(5):
-            if color_mask & (1 << i):
-                # This index is marked green
-                words = [word for word in words if word[i] == guess[i]]
-            elif color_mask & (1 << (i + 5)):
-                # This index is marked yellow
-                words = [word for word in words if (
-                    # Amount of occurrences of the letter must be at least equal to the amount of green+yellows of that letter;
-                    # the yellow hint does not exclude that there may be more occurrences in the target word.
-                        len([letter for letter in word if letter == guess[i]]) >= counts[(guess[i], Color.GREEN)] + counts[(guess[i], Color.YELLOW)]
-                        and word[i] != guess[i]
-                )]
-            else:
-                # This index is marked gray
-                words = [word for word in words if (
-                    # Amount of occurrences of the letter should be exactly equal to the amount of greens+yellows of that letter;
-                    # the white hint denotes that no more occurrences can be present in the target word.
-                        len([letter for letter in word if letter == guess[i]]) == counts[(guess[i], Color.GREEN)] + counts[(guess[i], Color.YELLOW)]
-                        and word[i] != guess[i]
-                )]
-
-        return words
-
-    def _filter_feasible_solutions(self) -> None:
-        """Filter the internal list of feasible solutions based on the hints given in the last played turn."""
-        if not self.turns:
-            return
-
-        guess, color_mask = self.turns[-1]
-        counts: dict[tuple[str, Color], int] = collections.defaultdict(lambda: 0)
-
-        for index, letter in enumerate(guess):
-            if color_mask & (1 << index) != 0:
-                counts[(letter, Color.GREEN)] += 1
-            elif color_mask & (1 << (index + self.WORD_LENGTH)) != 0:
-                counts[(letter, Color.YELLOW)] += 1
-
-        self._feasible_solutions = self._filter_words_based_on_color_mask(self._feasible_solutions, guess, color_mask, counts)
-        if self.is_hard_mode:
-            self._all_guesses = self._filter_words_based_on_color_mask(self._all_guesses, guess, color_mask, counts)
-
     def get_best_guesses(self):
-        best_guesses = self.metric().get_optimal_guesses(self._all_guesses, self._feasible_solutions, len(self.turns) == 0)
+        best_guesses, optimum = self.metric().get_optimal_guesses(self._all_guesses, self._feasible_solutions, len(self.turns) == 0)
 
         # If we have multiple equivalent guesses, but some lie in the solution set and some don't, then prefer the ones in the solution set.
         # They are equivalent but maybe picking a solution guess leads to a lucky win!
@@ -158,9 +95,12 @@ class Game:
 
     def play_turn(self, guess: str):
         assert self.solution is not None, "Cannot process turn without knowing the solution"
-        hints = list(get_buckets(guess, [self.solution]).keys())[0]
-        self.turns.append((guess, hints))
-        self._filter_feasible_solutions()
+        color_mask: ColorMask = list(get_buckets(guess, [self.solution]).keys())[0]
+        self.turns.append((guess, color_mask))
+        self._feasible_solutions = filter_feasible_words(self._feasible_solutions, guess, color_mask)
+
+        if self.is_hard_mode:
+            self._all_guesses = filter_feasible_words(self._all_guesses, guess, color_mask)
 
         metrics.Metric.TURNS_PLAYED += 1
 

@@ -14,3 +14,4 @@ TURN_1_CACHE: Optional[dict[str, dict[ColorMask, int]]] = None
 
 COUNTERS_PER_SOLUTION: dict[str, Counter] = {}
 BUCKETS_CACHE: dict[tuple[str, str], ColorMask] = {}
+

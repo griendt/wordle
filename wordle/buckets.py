@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import cache
+from wordle import cache
 
 
 def get_buckets_many(guesses: list[str], solutions: list[str]) -> dict[str, dict[int, int]]:
